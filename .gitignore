@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+soraclevenv/
+env/
+
+# Project artifacts (generated, not source)
+cache/
+outputs/
+*.pt
+!tests/**/*.pt
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+StabilityOracle/

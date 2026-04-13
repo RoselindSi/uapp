@@ -1,0 +1,21 @@
+# Default hyperparameters. Override from the command line with --key value.
+
+seed: 42
+
+data:
+  cache_path: cache/t2837_embeddings.pt
+  batch_size: 128
+
+head:
+  d_hidden: 128
+  dropout: 0.1
+  sigma_floor: 1.0e-6
+  init_sigma_bias: 0.5          # positive bias on sigma head to avoid variance collapse early
+
+train:
+  max_epochs: 200
+  lr: 1.0e-3
+  weight_decay: 1.0e-5
+  patience: 20
+  min_delta: 1.0e-4
+  log_every: 10
