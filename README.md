@@ -151,3 +151,31 @@ The reliability diagram is what goes in your final report.
   proteins.
 - **Random seeds**: all scripts accept `--seed`. Report results averaged
   over 3 seeds in your final report.
+
+
+## Research tracks runner (Student-t, fixed-sigma, ranking-aware)
+
+After you have cached embeddings with train/val/test splits (for example `cache/t2837_embeddings_v2.pt`), run:
+
+```bash
+python scripts/05_run_research_tracks.py \
+    --embeddings cache/t2837_embeddings_v2.pt \
+    --out outputs/research_tracks \
+    --seed 42
+```
+
+Outputs:
+
+- `outputs/research_tracks/research_track_summary.csv` — all implemented track results
+- `outputs/research_tracks/best_models.json` — best-by-ICE and best-by-NLL snapshots
+
+This script implements the planned tracks:
+
+- Student-t `nu` sweep + post-hoc variance scaling (`sigma' = a*sigma + b`)
+- Mentor direction with fixed-sigma probabilistic head
+- Ranking-aware auxiliary uncertainty loss
+
+Optional notebook walkthrough:
+
+- `research_tracks_walkthrough.ipynb` — step-by-step notebook to run the new
+  tracks and inspect `research_track_summary.csv` / `best_models.json`.

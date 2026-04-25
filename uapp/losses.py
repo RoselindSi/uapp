@@ -5,6 +5,7 @@ Key losses:
     gaussian_nll_loss — standard Gaussian NLL (original)
     student_t_nll_loss — Student-t NLL with learnable or fixed degrees of freedom
     regularized_nll_loss — Gaussian NLL + sigma penalty term
+    uncertainty_ranking_loss — pairwise ranking loss for sigma vs residuals
 
 The Gaussian NLL (Eq. 3 from proposal):
     L = (y - mu)^2 / (2*sigma^2) + 0.5 * log(sigma^2)
@@ -46,29 +47,15 @@ def student_t_nll_loss(
     nu: float = 3.0,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Student-t negative log-likelihood.
-
-    Heavier tails than Gaussian — more robust to outlier ddG values.
-    nu (degrees of freedom):
-        nu = 1  -> Cauchy (very heavy tails)
-        nu = 3  -> heavy tails (good default for protein data)
-        nu = 30 -> approximately Gaussian
-        nu -> inf -> exactly Gaussian
-
-    Parameters
-    ----------
-    pred_mean : (batch,) predicted mu
-    pred_sigma : (batch,) predicted scale (positive)
-    target : (batch,) true ddG
-    nu : degrees of freedom (fixed, not learned)
-    eps : floor for numerical stability
-    """
+    """Student-t negative log-likelihood."""
     pred_var = pred_sigma.pow(2) + eps
     z_sq = (target - pred_mean).pow(2) / (nu * pred_var)
 
-    # log-gamma terms
-    log_gamma_half_nu_plus_1 = torch.lgamma(torch.tensor((nu + 1) / 2.0))
-    log_gamma_half_nu = torch.lgamma(torch.tensor(nu / 2.0))
+    # Keep constants on same device/dtype as predictions.
+    c1 = torch.tensor((nu + 1) / 2.0, device=pred_mean.device, dtype=pred_mean.dtype)
+    c2 = torch.tensor(nu / 2.0, device=pred_mean.device, dtype=pred_mean.dtype)
+    log_gamma_half_nu_plus_1 = torch.lgamma(c1)
+    log_gamma_half_nu = torch.lgamma(c2)
 
     nll = (
         -log_gamma_half_nu_plus_1
@@ -88,13 +75,33 @@ def regularized_nll_loss(
     lambda_reg: float = 0.1,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Gaussian NLL with a sigma regularization term.
-
-    loss = NLL + lambda * mean((sigma - sigma_prior)^2)
-
-    This prevents sigma from inflating to "cover up" mean errors.
-    sigma_prior should be roughly the std of the target distribution.
-    """
+    """Gaussian NLL with a sigma regularization term."""
     nll = gaussian_nll_loss(pred_mean, pred_sigma, target, eps)
     sigma_penalty = lambda_reg * ((pred_sigma - sigma_prior) ** 2).mean()
     return nll + sigma_penalty
+
+
+def uncertainty_ranking_loss(
+    pred_mean: torch.Tensor,
+    pred_sigma: torch.Tensor,
+    target: torch.Tensor,
+    margin: float = 0.05,
+) -> torch.Tensor:
+    """Pairwise hinge ranking loss between sigma and absolute residual.
+
+    Encourages: if sample i has larger |error| than sample j, then
+    sigma_i should be larger than sigma_j by at least `margin`.
+    """
+    abs_err = (target - pred_mean).abs()
+    # Pairwise differences
+    err_diff = abs_err[:, None] - abs_err[None, :]
+    sig_diff = pred_sigma[:, None] - pred_sigma[None, :]
+
+    # Only keep ordered pairs with strictly higher residual
+    mask = err_diff > 0
+    if not torch.any(mask):
+        return torch.zeros((), device=pred_mean.device, dtype=pred_mean.dtype)
+
+    # For those pairs we want sig_diff >= margin
+    violations = F.relu(margin - sig_diff[mask])
+    return violations.mean()
