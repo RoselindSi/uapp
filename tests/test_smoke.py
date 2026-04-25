@@ -39,8 +39,8 @@ from uapp.evaluate import (
     plot_reliability_diagram,
     save_results_json,
 )
-from uapp.heads import MSEHead, SingleHeadNLL, TwoHeadNLL, build_head, is_probabilistic
-from uapp.losses import gaussian_nll_loss, mse_loss
+from uapp.heads import MSEHead, SingleHeadNLL, TwoHeadNLL, FixedSigmaNLL, build_head, is_probabilistic
+from uapp.losses import gaussian_nll_loss, mse_loss, uncertainty_ranking_loss
 from uapp.train import TrainConfig, train_head
 from uapp.utils import set_seed
 
@@ -112,6 +112,16 @@ class TestLosses:
         loss = gaussian_nll_loss(mu, sigma, y)
         assert torch.isfinite(loss)
 
+
+
+    def test_ranking_loss_finite(self):
+        mu = torch.tensor([0.0, 0.0, 0.0, 0.0])
+        sigma = torch.tensor([0.1, 0.2, 0.3, 0.4])
+        y = torch.tensor([0.0, 0.5, 1.0, 1.5])
+        loss = uncertainty_ranking_loss(mu, sigma, y)
+        assert torch.isfinite(loss)
+        assert loss.item() >= 0
+
     def test_gaussian_nll_penalizes_overconfidence(self):
         """A confident wrong prediction should have higher NLL than
         a less confident wrong prediction with the same mean error."""
@@ -148,10 +158,20 @@ class TestHeads:
         assert (sigma > 0).all()
         assert is_probabilistic(head)
 
+    def test_fixed_sigma_head_output_shapes(self):
+        head = FixedSigmaNLL(d_in=16, fixed_sigma=1.7)
+        X = torch.randn(5, 16)
+        mu, sigma = head(X)
+        assert mu.shape == (5,)
+        assert sigma.shape == (5,)
+        assert torch.allclose(sigma, torch.ones_like(sigma) * 1.7)
+        assert is_probabilistic(head)
+
     def test_build_head_factory(self):
         assert isinstance(build_head("mse", 16), MSEHead)
         assert isinstance(build_head("two_head_nll", 16), TwoHeadNLL)
         assert isinstance(build_head("single_head_nll", 16), SingleHeadNLL)
+        assert isinstance(build_head("fixed_sigma_nll", 16), FixedSigmaNLL)
         with pytest.raises(ValueError):
             build_head("nonsense", 16)
 
