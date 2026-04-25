@@ -1,0 +1,5 @@
+config,RMSE,NLL,ICE,cov@90,"corr(sig,err)",mean_sig
+sig_alea only,1.393,2.2073,0.0351,0.829,-0.1828,1.0638
+sig_alea + density_v2,1.393,1.8107,0.0878,0.906,-0.0196,1.5299
+sig_alea + Laplace,1.393,2.1865,0.0349,0.829,-0.1819,1.0707
+sig_alea + Lap + density_v2,1.393,1.8101,0.0884,0.906,-0.0193,1.5343

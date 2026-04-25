@@ -15,11 +15,20 @@ env/
 cache/
 outputs/
 *.pt
-!tests/**/*.pt
+
+# Stability Oracle repo (cloned dependency, not our code)
+StabilityOracle/
 
 # OS / editor
 .DS_Store
+Thumbs.db
 .idea/
 .vscode/
 *.swp
-StabilityOracle/
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+
+# HuggingFace model cache (if downloaded locally)
+.cache/
