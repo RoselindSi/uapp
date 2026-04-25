@@ -24,6 +24,7 @@ from .losses import (
     mse_loss,
     regularized_nll_loss,
     student_t_nll_loss,
+    uncertainty_ranking_loss,
 )
 
 log = logging.getLogger("uapp.train")
@@ -39,6 +40,9 @@ class TrainConfig:
     log_every: int = 10
     # Loss configuration
     loss_type: Literal["auto", "gaussian", "student_t", "regularized"] = "auto"
+    # Ranking-aware auxiliary uncertainty loss
+    ranking_lambda: float = 0.0
+    ranking_margin: float = 0.05
     # Student-t degrees of freedom
     student_t_nu: float = 3.0
     # Sigma regularization parameters
@@ -94,17 +98,28 @@ def _compute_loss(
         loss_type = "gaussian"
 
     if loss_type == "gaussian":
-        return gaussian_nll_loss(mu, sigma, y)
+        base_loss = gaussian_nll_loss(mu, sigma, y)
     elif loss_type == "student_t":
-        return student_t_nll_loss(mu, sigma, y, nu=config.student_t_nu)
+        base_loss = student_t_nll_loss(mu, sigma, y, nu=config.student_t_nu)
     elif loss_type == "regularized":
-        return regularized_nll_loss(
+        base_loss = regularized_nll_loss(
             mu, sigma, y,
             sigma_prior=config.sigma_prior,
             lambda_reg=config.lambda_reg,
         )
     else:
         raise ValueError(f"unknown loss_type: {loss_type}")
+
+    if config.ranking_lambda > 0.0:
+        rank_loss = uncertainty_ranking_loss(
+            pred_mean=mu,
+            pred_sigma=sigma,
+            target=y,
+            margin=config.ranking_margin,
+        )
+        base_loss = base_loss + config.ranking_lambda * rank_loss
+
+    return base_loss
 
 
 def _epoch_pass(
