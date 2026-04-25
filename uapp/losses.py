@@ -44,25 +44,33 @@ def student_t_nll_loss(
     pred_mean: torch.Tensor,
     pred_sigma: torch.Tensor,
     target: torch.Tensor,
-    nu: float = 3.0,
+    nu: float | torch.Tensor = 3.0,
     eps: float = 1e-6,
 ) -> torch.Tensor:
-    """Student-t negative log-likelihood."""
-    pred_var = pred_sigma.pow(2) + eps
-    z_sq = (target - pred_mean).pow(2) / (nu * pred_var)
+    """Student-t negative log-likelihood.
 
-    # Keep constants on same device/dtype as predictions.
-    c1 = torch.tensor((nu + 1) / 2.0, device=pred_mean.device, dtype=pred_mean.dtype)
-    c2 = torch.tensor(nu / 2.0, device=pred_mean.device, dtype=pred_mean.dtype)
-    log_gamma_half_nu_plus_1 = torch.lgamma(c1)
-    log_gamma_half_nu = torch.lgamma(c2)
+    `nu` can be a Python float (fixed) or a scalar Tensor (learnable).
+    When Tensor, gradients flow through nu so it can be trained jointly.
+    """
+    pred_var = pred_sigma.pow(2) + eps
+
+    # Promote scalar float nu to a Tensor so all ops are differentiable.
+    if not isinstance(nu, torch.Tensor):
+        nu_t = torch.tensor(float(nu), device=pred_mean.device, dtype=pred_mean.dtype)
+    else:
+        nu_t = nu.to(device=pred_mean.device, dtype=pred_mean.dtype)
+
+    # Clamp to keep nu in a numerically safe range (>2 ensures finite variance).
+    nu_t = nu_t.clamp(min=2.01)
+
+    z_sq = (target - pred_mean).pow(2) / (nu_t * pred_var)
 
     nll = (
-        -log_gamma_half_nu_plus_1
-        + log_gamma_half_nu
-        + 0.5 * math.log(nu * math.pi)
+        -torch.lgamma((nu_t + 1.0) / 2.0)
+        + torch.lgamma(nu_t / 2.0)
+        + 0.5 * (torch.log(nu_t) + math.log(math.pi))
         + 0.5 * torch.log(pred_var)
-        + ((nu + 1) / 2.0) * torch.log1p(z_sq)
+        + ((nu_t + 1.0) / 2.0) * torch.log1p(z_sq)
     )
     return nll.mean()
 
