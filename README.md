@@ -174,3 +174,8 @@ This script implements the planned tracks:
 - Student-t `nu` sweep + post-hoc variance scaling (`sigma' = a*sigma + b`)
 - Mentor direction with fixed-sigma probabilistic head
 - Ranking-aware auxiliary uncertainty loss
+
+Optional notebook walkthrough:
+
+- `research_tracks_walkthrough.ipynb` — step-by-step notebook to run the new
+  tracks and inspect `research_track_summary.csv` / `best_models.json`.
