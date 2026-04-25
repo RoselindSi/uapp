@@ -12,6 +12,8 @@ softplus + a small epsilon floor to prevent variance collapse.
 """
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -44,6 +46,10 @@ class TwoHeadNLL(nn.Module):
 
     Pro: independent capacity per output, more flexible.
     Con: more parameters, no shared features.
+
+    When ``learn_nu=True`` the head also trains a global scalar degrees-of-
+    freedom parameter (log_nu → nu via exp + clamp).  This is used by the
+    training loop when ``loss_type="student_t"`` and ``student_t_nu <= 0``.
     """
 
     def __init__(
@@ -53,15 +59,29 @@ class TwoHeadNLL(nn.Module):
         dropout: float = 0.1,
         sigma_floor: float = 1e-6,
         init_sigma_bias: float = 0.0,
+        learn_nu: bool = False,
+        init_nu: float = 3.0,
     ):
         super().__init__()
         self.mu_mlp = _mlp(d_in, d_hidden, 1, dropout)
         self.sigma_mlp = _mlp(d_in, d_hidden, 1, dropout)
         self.sigma_floor = sigma_floor
-        # Optional positive bias on the final sigma layer to start sigma
-        # slightly above zero (helps avoid variance collapse early in training).
         with torch.no_grad():
             self.sigma_mlp[-1].bias.fill_(init_sigma_bias)
+
+        self.learn_nu = learn_nu
+        if learn_nu:
+            # Parameterize as log_nu so nu stays positive; clamped > 2 in the loss.
+            self.log_nu = nn.Parameter(torch.tensor(math.log(max(init_nu, 2.01))))
+        else:
+            self.log_nu = None
+
+    @property
+    def nu(self) -> torch.Tensor | None:
+        """Current (differentiable) nu scalar, or None if nu is not learned."""
+        if self.log_nu is None:
+            return None
+        return torch.exp(self.log_nu)
 
     def forward(self, h: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """Returns (pred_mean, pred_sigma), each of shape (batch,)."""
@@ -130,7 +150,11 @@ class SingleHeadNLL(nn.Module):
 
 
 def build_head(name: str, d_in: int, **kwargs) -> nn.Module:
-    """Factory by name: 'mse', 'two_head_nll', 'single_head_nll', 'fixed_sigma_nll'."""
+    """Factory by name: 'mse', 'two_head_nll', 'single_head_nll', 'fixed_sigma_nll'.
+
+    ``two_head_nll`` also accepts ``learn_nu=True`` to add a trainable global
+    degrees-of-freedom parameter for the Student-t loss.
+    """
     name = name.lower()
     if name == "mse":
         return MSEHead(d_in, **kwargs)

@@ -100,7 +100,15 @@ def _compute_loss(
     if loss_type == "gaussian":
         base_loss = gaussian_nll_loss(mu, sigma, y)
     elif loss_type == "student_t":
-        base_loss = student_t_nll_loss(mu, sigma, y, nu=config.student_t_nu)
+        # Use a learnable nu if the head exposes one (learn_nu=True),
+        # otherwise fall back to the fixed scalar in TrainConfig.
+        # Convention: student_t_nu <= 0 signals "use head's learned nu".
+        learned_nu = getattr(head, "nu", None)
+        if learned_nu is not None:
+            nu_val = learned_nu  # differentiable Tensor
+        else:
+            nu_val = config.student_t_nu
+        base_loss = student_t_nll_loss(mu, sigma, y, nu=nu_val)
     elif loss_type == "regularized":
         base_loss = regularized_nll_loss(
             mu, sigma, y,

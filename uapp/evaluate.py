@@ -47,6 +47,8 @@ class EvalResult:
     nll: float | None           # None for MSE head (no variance estimate)
     ice: float | None           # None for MSE head
     coverage: dict[str, float] | None  # {"0.50": 0.48, "0.90": 0.88, ...}
+    spearman: float | None = None      # Spearman(sigma, |error|); None for MSE head
+    top_k_risk: dict[str, float] | None = None  # top-k risk capture; None for MSE head
 
     def pretty(self) -> str:
         lines = [f"[{self.head_name}] n={self.n_test}"]
@@ -61,6 +63,13 @@ class EvalResult:
                 f"{k}\u2192{v:.3f}" for k, v in sorted(self.coverage.items())
             )
             lines.append(cov_str)
+        if self.spearman is not None:
+            lines.append(f"  Spearman(\u03c3,|e|): {self.spearman:.4f}")
+        if self.top_k_risk:
+            tk_str = "  top-k risk: " + ", ".join(
+                f"k={k}\u2192{v:.3f}" for k, v in sorted(self.top_k_risk.items())
+            )
+            lines.append(tk_str)
         return "\n".join(lines)
 
 
@@ -188,6 +197,8 @@ def evaluate_head(
 
     nll = compute_gaussian_nll(mu, sigma, y)
     ice, coverage = compute_ice(mu, sigma, y)
+    spearman = compute_spearman_sigma_error(mu, sigma, y)
+    top_k_risk = compute_top_k_risk_capture(mu, sigma, y)
     return EvalResult(
         head_name=head_name,
         n_test=int(len(y)),
@@ -196,6 +207,8 @@ def evaluate_head(
         nll=nll,
         ice=ice,
         coverage=coverage,
+        spearman=spearman,
+        top_k_risk=top_k_risk,
     )
 
 
@@ -269,3 +282,48 @@ def gather_probabilistic_predictions(
     mu, y, sigma = _gather_predictions(head, test_loader, device)
     assert sigma is not None, "head must be probabilistic"
     return mu, sigma, y
+
+
+# ---------------------------------------------------------------------------
+# Ranking-quality metrics (Track C / deliverable table)
+# ---------------------------------------------------------------------------
+
+def compute_spearman_sigma_error(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    y: np.ndarray,
+) -> float:
+    """Spearman rank correlation between predicted sigma and absolute error.
+
+    A value near 1.0 means the model correctly ranks hard vs. easy samples.
+    Near 0 means uncertainty is globally calibrated but not individually informative.
+    """
+    from scipy.stats import spearmanr
+
+    abs_err = np.abs(y - mu)
+    r, _ = spearmanr(sigma, abs_err)
+    return float(r)
+
+
+def compute_top_k_risk_capture(
+    mu: np.ndarray,
+    sigma: np.ndarray,
+    y: np.ndarray,
+    k_fracs: list[float] | None = None,
+) -> dict[str, float]:
+    """Top-k risk capture: fraction of the k% largest errors inside top-k% uncertain predictions.
+
+    A perfect oracle would score 1.0 at every k. A random ranker scores ~k (diagonal).
+    Values above the diagonal indicate the uncertainty estimate has discriminative power.
+    """
+    if k_fracs is None:
+        k_fracs = [0.10, 0.20, 0.30]
+    abs_err = np.abs(y - mu)
+    n = len(abs_err)
+    result: dict[str, float] = {}
+    for frac in k_fracs:
+        k = max(1, int(n * frac))
+        top_err_idx = set(np.argsort(abs_err)[-k:])
+        top_sig_idx = set(np.argsort(sigma)[-k:])
+        result[f"{frac:.2f}"] = float(len(top_err_idx & top_sig_idx) / k)
+    return result
