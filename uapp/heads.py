@@ -149,11 +149,84 @@ class SingleHeadNLL(nn.Module):
         return mu, sigma
 
 
-def build_head(name: str, d_in: int, **kwargs) -> nn.Module:
-    """Factory by name: 'mse', 'two_head_nll', 'single_head_nll', 'fixed_sigma_nll'.
+class FeatureAugmentedHead(nn.Module):
+    """μ branch sees only ``h_G``; σ branch additionally sees biophysical features.
 
-    ``two_head_nll`` also accepts ``learn_nu=True`` to add a trainable global
+    Designed for Track-D ablations: the mean pathway is held constant across
+    feature-set variants, so any change in calibration / ranking metrics is
+    attributable to the variance branch alone.
+
+    The forward signature is ``forward(h, extra=None)``: when ``extra`` is
+    provided it is concatenated onto ``h`` for the σ MLP only.
+
+    Parameters
+    ----------
+    d_in        : embedding dimension
+    d_extra     : dimensionality of the extra features (0 = baseline)
+    d_hidden    : MLP hidden size
+    dropout     : MLP dropout
+    sigma_floor : lower bound added to softplus(raw_sigma)
+    init_sigma_bias : positive bias on the final sigma layer to prevent collapse
+    """
+
+    def __init__(
+        self,
+        d_in: int,
+        d_extra: int = 0,
+        d_hidden: int = 128,
+        dropout: float = 0.1,
+        sigma_floor: float = 1e-6,
+        init_sigma_bias: float = 0.5,
+    ):
+        super().__init__()
+        if d_extra < 0:
+            raise ValueError("d_extra must be >= 0")
+        self.d_extra = d_extra
+        self.sigma_floor = sigma_floor
+
+        self.mu_mlp    = _mlp(d_in, d_hidden, 1, dropout)
+        self.sigma_mlp = _mlp(d_in + d_extra, d_hidden, 1, dropout)
+        with torch.no_grad():
+            self.sigma_mlp[-1].bias.fill_(init_sigma_bias)
+
+    def forward(
+        self,
+        h: torch.Tensor,
+        extra: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns (pred_mean, pred_sigma), each shape (batch,)."""
+        mu = self.mu_mlp(h).squeeze(-1)
+
+        if self.d_extra == 0:
+            h_sigma = h
+        else:
+            if extra is None:
+                raise ValueError(
+                    f"FeatureAugmentedHead expects {self.d_extra} extra features, got None"
+                )
+            if extra.shape[-1] != self.d_extra:
+                raise ValueError(
+                    f"extra has {extra.shape[-1]} features, expected {self.d_extra}"
+                )
+            h_sigma = torch.cat([h, extra.float()], dim=-1)
+
+        raw = self.sigma_mlp(h_sigma).squeeze(-1)
+        sigma = F.softplus(raw) + self.sigma_floor
+        return mu, sigma
+
+
+def build_head(name: str, d_in: int, **kwargs) -> nn.Module:
+    """Factory by name.
+
+    Supported names:
+        'mse', 'two_head_nll', 'single_head_nll', 'fixed_sigma_nll',
+        'feature_augmented_nll'.
+
+    ``two_head_nll`` accepts ``learn_nu=True`` to add a trainable global
     degrees-of-freedom parameter for the Student-t loss.
+
+    ``feature_augmented_nll`` accepts ``d_extra=<int>`` for the size of the
+    biophysical-feature vector concatenated to the σ branch only.
     """
     name = name.lower()
     if name == "mse":
@@ -164,9 +237,11 @@ def build_head(name: str, d_in: int, **kwargs) -> nn.Module:
         return SingleHeadNLL(d_in, **kwargs)
     if name == "fixed_sigma_nll":
         return FixedSigmaNLL(d_in, **kwargs)
+    if name == "feature_augmented_nll":
+        return FeatureAugmentedHead(d_in, **kwargs)
     raise ValueError(f"unknown head: {name!r}")
 
 
 def is_probabilistic(head: nn.Module) -> bool:
     """True if the head outputs (mu, sigma); False if mu only."""
-    return isinstance(head, (TwoHeadNLL, SingleHeadNLL, FixedSigmaNLL))
+    return isinstance(head, (TwoHeadNLL, SingleHeadNLL, FixedSigmaNLL, FeatureAugmentedHead))
