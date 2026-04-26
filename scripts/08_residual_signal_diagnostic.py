@@ -62,11 +62,14 @@ def main() -> None:
     p.add_argument("--seed",       type=int, default=42)
     p.add_argument("--max-epochs", type=int, default=200)
     p.add_argument("--patience",   type=int, default=25)
+    p.add_argument("--device",     type=str, default="auto",
+                   help="auto | cpu | cuda | mps   (default: auto)")
     args = p.parse_args()
 
     log = setup_logging("INFO")
     set_seed(args.seed)
-    device = get_device()
+    device = get_device(device_str=args.device)
+    log.info("Device: %s", device)
 
     # ── Load data ────────────────────────────────────────────────────────────
     splits, _ = load_cached_embeddings(args.embeddings)

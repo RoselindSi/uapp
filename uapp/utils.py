@@ -20,10 +20,25 @@ def set_seed(seed: int) -> None:
     os.environ["PYTHONHASHSEED"] = str(seed)
 
 
-def get_device(prefer_cuda: bool = True) -> torch.device:
-    """Return CUDA if available and preferred, else CPU."""
+def get_device(prefer_cuda: bool = True, device_str: str | None = None) -> torch.device:
+    """Resolve a torch device.
+
+    Parameters
+    ----------
+    prefer_cuda : if True, prefer CUDA over MPS over CPU on auto-resolve.
+    device_str  : optional explicit override.  Accepts ``"auto"``, ``"cpu"``,
+                  ``"cuda"``, ``"mps"``.  If unset or ``"auto"``, picks the
+                  best available accelerator.
+
+    Resolution order on auto: CUDA → MPS (Apple Silicon) → CPU.
+    """
+    if device_str and device_str.lower() != "auto":
+        return torch.device(device_str.lower())
+
     if prefer_cuda and torch.cuda.is_available():
         return torch.device("cuda")
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
     return torch.device("cpu")
 
 
