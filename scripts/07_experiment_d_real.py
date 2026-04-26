@@ -266,6 +266,8 @@ def main() -> None:
     p.add_argument("--nu",         type=float, default=3.0,
                    help="Student-t degrees of freedom (fixed for clean attribution)")
     p.add_argument("--seed",       type=int,   default=42)
+    p.add_argument("--device",     type=str,   default="auto",
+                   help="auto | cpu | cuda | mps   (default: auto)")
     p.add_argument("--log-level",  type=str,   default="INFO")
     p.add_argument("--ablations",  nargs="+",  default=["D0", "D1", "D2", "D3"],
                    choices=["D0", "D1", "D2", "D3"])
@@ -273,7 +275,7 @@ def main() -> None:
 
     log = setup_logging(args.log_level)
     set_seed(args.seed)
-    device = get_device()
+    device = get_device(device_str=args.device)
     out_dir = ensure_dir(args.out)
     log.info("Device: %s", device)
 

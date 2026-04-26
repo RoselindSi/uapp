@@ -62,6 +62,7 @@ def run_one_seed(seed: int, args, out_subdir: Path) -> list[dict]:
         "--seed",       str(seed),
         "--max-epochs", str(args.max_epochs),
         "--patience",   str(args.patience),
+        "--device",     args.device,
         "--log-level",  "WARNING",
     ]
     subprocess.run(cmd, check=True)
@@ -125,6 +126,8 @@ def main() -> None:
     p.add_argument("--seeds",      type=int, nargs="+", default=[0, 1, 2, 3, 4])
     p.add_argument("--max-epochs", type=int, default=200)
     p.add_argument("--patience",   type=int, default=25)
+    p.add_argument("--device",     type=str, default="auto",
+                   help="auto | cpu | cuda | mps  (passed through to script 07)")
     p.add_argument("--keep-per-seed-dirs", action="store_true",
                    help="Keep per-seed output dirs (default: clean up to save disk)")
     args = p.parse_args()
