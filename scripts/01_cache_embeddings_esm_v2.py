@@ -1,32 +1,47 @@
 """Cache mutation-aware ESM-2 embeddings for T2837.
 
-Instead of mean-pooling the whole sequence into a single 320-d vector
+Instead of mean-pooling the whole sequence into a single d-dim vector
 (which loses all mutation-site information), this script constructs a
 *mutation-specific* feature vector for each row in T2837:
 
     x = [ h_i, mean(h_{i-k:i+k}), e(wtAA), e(mutAA) ]
 
 Where:
-    h_i             = ESM-2 embedding at the mutation site (320-d)
-    mean(h_window)  = mean-pooled local window around site (320-d)
-    e(wtAA)         = one-hot encoding of wild-type amino acid (20-d)
-    e(mutAA)        = one-hot encoding of mutant amino acid (20-d)
+    h_i             = ESM-2 embedding at the mutation site  (d-dim)
+    mean(h_window)  = mean-pooled local window around site  (d-dim)
+    e(wtAA)         = one-hot encoding of wild-type AA      (20-d)
+    e(mutAA)        = one-hot encoding of mutant AA         (20-d)
 
-Total input dimension: 320 + 320 + 20 + 20 = 680
+Total input dimension: 2·d + 40.
 
-This means different mutations on the same protein get DIFFERENT input
-vectors, because h_i differs by position and the AA one-hots differ by
-substitution type.
+Backbone selection (``--esm-model``)
+------------------------------------
++--------------------------------+--------+----------+-------------------------------+
+| --esm-model                    |  d     | params   | use case                       |
++--------------------------------+--------+----------+-------------------------------+
+| facebook/esm2_t6_8M_UR50D      |   320  |  8 M     | default; fast, weak signal     |
+| facebook/esm2_t12_35M_UR50D    |   480  | 35 M     | medium                         |
+| facebook/esm2_t30_150M_UR50D   |   640  | 150 M    | strong, ~4× slower than 8M     |
+| facebook/esm2_t33_650M_UR50D   | 1280   | 650 M    | strongest open ESM2; needs GPU |
++--------------------------------+--------+----------+-------------------------------+
 
 Usage
 -----
+    # Default (ESM2-8M, fast):
     python scripts/01_cache_embeddings_esm_v2.py \
         --t2837-csv StabilityOracle/data/datasets/T2837.csv \
         --out cache/t2837_embeddings_v2.pt \
-        --window-size 5 \
         --seed 42
 
-Expected runtime: 5-15 minutes on CPU.
+    # ESM2-650M backbone (recommended next step; needs GPU or several hours on CPU):
+    python scripts/01_cache_embeddings_esm_v2.py \
+        --t2837-csv StabilityOracle/data/datasets/T2837.csv \
+        --out cache/t2837_embeddings_v2_650m.pt \
+        --esm-model facebook/esm2_t33_650M_UR50D \
+        --seed 42
+
+Expected runtime: 5-15 min CPU for the 8M model, several hours for 650M
+without a GPU.
 """
 from __future__ import annotations
 
@@ -45,8 +60,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from uapp.data import save_cached_embeddings
 from uapp.utils import set_seed, setup_logging
 
-ESM_MODEL = "facebook/esm2_t6_8M_UR50D"
-ESM_DIM = 320
+DEFAULT_ESM_MODEL = "facebook/esm2_t6_8M_UR50D"
 
 AA3to1 = {
     'ALA': 'A', 'ARG': 'R', 'ASN': 'N', 'ASP': 'D', 'CYS': 'C',
@@ -92,18 +106,20 @@ def find_mutation_index(sequence: str, position: int, wt_aa_3: str) -> int | Non
     return None
 
 
-def load_esm2(device: torch.device):
+def load_esm2(device: torch.device, esm_model: str = DEFAULT_ESM_MODEL):
     """Load ESM-2 tokenizer and model, frozen."""
     from transformers import EsmModel, EsmTokenizer
     log = setup_logging()
-    log.info("loading ESM-2: %s", ESM_MODEL)
-    tokenizer = EsmTokenizer.from_pretrained(ESM_MODEL)
-    model = EsmModel.from_pretrained(ESM_MODEL)
+    log.info("loading ESM-2: %s", esm_model)
+    tokenizer = EsmTokenizer.from_pretrained(esm_model)
+    model = EsmModel.from_pretrained(esm_model)
     model.eval()
     for p in model.parameters():
         p.requires_grad = False
     model.to(device)
-    log.info("ESM-2 loaded (%d params)", sum(p.numel() for p in model.parameters()))
+    log.info("ESM-2 loaded (%d params, hidden_size=%d)",
+             sum(p.numel() for p in model.parameters()),
+             model.config.hidden_size)
     return tokenizer, model
 
 
@@ -181,6 +197,9 @@ def main():
     parser.add_argument("--test-fraction", type=float, default=0.15)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="auto")
+    parser.add_argument("--esm-model", type=str, default=DEFAULT_ESM_MODEL,
+                        help="HuggingFace ESM-2 model id (default: 8M).  "
+                             "Use facebook/esm2_t33_650M_UR50D for the 650M backbone.")
     args = parser.parse_args()
 
     log = setup_logging()
@@ -224,7 +243,8 @@ def main():
         log.info("  %s: %d mutations from %d proteins", split, n, n_pdbs)
 
     # 4. Load ESM-2
-    tokenizer, model = load_esm2(device)
+    tokenizer, model = load_esm2(device, args.esm_model)
+    embed_dim = int(model.config.hidden_size)
 
     # 5. Cache per-residue embeddings per unique sequence
     unique_seqs = df.drop_duplicates(subset=["pdb_code", "sequence"])[
@@ -276,9 +296,12 @@ def main():
         splits,
         meta={
             "source": "T2837",
-            "backbone": f"ESM-2 ({ESM_MODEL}) mutation-aware",
+            "backbone": f"ESM-2 ({args.esm_model}) mutation-aware",
             "embed_dim": feat_dim,
-            "components": "h_site(320) + h_window(320) + wt_onehot(20) + mut_onehot(20)",
+            "components": (
+                f"h_site({embed_dim}) + h_window({embed_dim}) "
+                f"+ wt_onehot(20) + mut_onehot(20)"
+            ),
             "window_size": args.window_size,
             "n_unique_sequences": len(unique_seqs),
             "n_mapped": n_after,
