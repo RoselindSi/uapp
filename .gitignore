@@ -1,34 +1,80 @@
-# Python
+# ─── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*$py.class
+*.egg
 *.egg-info/
-.pytest_cache/
-.ipynb_checkpoints/
+build/
+dist/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Virtual environments
+# ─── Virtual environments ────────────────────────────────────────────────────
 .venv/
 venv/
-soraclevenv/
 env/
+soraclevenv/
+.python-version
 
-# Project artifacts (generated, not source)
+# ─── Tooling caches ──────────────────────────────────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# ─── Jupyter ─────────────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# ─── Project artefacts (generated, not source) ───────────────────────────────
+# Embedding caches and bio features — large + reproducible via scripts/01,06
 cache/
+# Experiment outputs (CSV/JSON/per-seed dirs) — reproducible via scripts/07,09
 outputs/
-*.pt
+# Model checkpoints / serialised tensors written by training runs
+*.ckpt
+*.pth
 
-# Stability Oracle repo (cloned dependency, not our code)
+# Scope `*.pt` to generated locations only — keeps room for small fixtures
+cache/**/*.pt
+outputs/**/*.pt
+
+# ─── ML experiment trackers ──────────────────────────────────────────────────
+mlruns/
+wandb/
+lightning_logs/
+.neptune/
+
+# ─── External / vendored ─────────────────────────────────────────────────────
+# Stability Oracle is a cloned dependency, not part of this repo
 StabilityOracle/
 
-# OS / editor
+# HuggingFace model cache (large, downloaded by transformers)
+.cache/
+
+# ─── Claude Code workspace metadata ──────────────────────────────────────────
+.claude/
+
+# ─── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# ─── Editors ─────────────────────────────────────────────────────────────────
 .idea/
 .vscode/
 *.swp
+*.swo
 *~
 
-# Jupyter
-.ipynb_checkpoints/
-
-# HuggingFace model cache (if downloaded locally)
-.cache/
+# ─── Logs / temp ─────────────────────────────────────────────────────────────
+*.log
+tmp/
+temp/
