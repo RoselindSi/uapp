@@ -6,3 +6,9 @@ matplotlib>=3.7
 scipy>=1.10
 tqdm>=4.65
 pytest>=7.4
+
+# Backbone (used by scripts/01_cache_embeddings_esm_v2.py and scripts/12_lora_finetune_d3.py)
+transformers>=4.35
+
+# LoRA fine-tuning (used by scripts/12_lora_finetune_d3.py only)
+peft>=0.7
