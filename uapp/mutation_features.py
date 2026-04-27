@@ -182,18 +182,49 @@ INDICATOR_NAMES = [
     "mut_is_glycine",
     "mut_is_aromatic",
 ]
+# Extended set — sequence-derived structural proxies.
+# These need (sequence, mut_idx) in addition to (wt, mut, rsa).
+EXTENDED_NAMES = [
+    "delta_helix_propensity",       # Chou-Fasman P_α(mut) − P_α(wt)
+    "delta_sheet_propensity",       # Chou-Fasman P_β(mut) − P_β(wt)
+    "local_entropy",                # Shannon entropy of AA composition in ±10 window
+    "local_hydrophobic_count",      # # of {AILMVF} in ±5 window
+    "local_charged_count",          # # of {DEKR} in ±5 window
+    "position_relative",            # mut_idx / max(seq_len-1, 1) ∈ [0, 1]
+]
 
 
-def feature_dim(include_indicators: bool = False) -> int:
+# Chou-Fasman 1978 secondary-structure propensities.
+_HELIX_PROP = {
+    "A": 1.42, "R": 0.98, "N": 0.67, "D": 1.01, "C": 0.70,
+    "Q": 1.11, "E": 1.51, "G": 0.57, "H": 1.00, "I": 1.08,
+    "L": 1.21, "K": 1.16, "M": 1.45, "F": 1.13, "P": 0.57,
+    "S": 0.77, "T": 0.83, "W": 1.08, "Y": 0.69, "V": 1.06,
+}
+_SHEET_PROP = {
+    "A": 0.83, "R": 0.93, "N": 0.89, "D": 0.54, "C": 1.19,
+    "Q": 1.10, "E": 0.37, "G": 0.75, "H": 0.87, "I": 1.60,
+    "L": 1.30, "K": 0.74, "M": 1.05, "F": 1.38, "P": 0.55,
+    "S": 0.75, "T": 1.19, "W": 1.37, "Y": 1.47, "V": 1.70,
+}
+_HYDROPHOBIC_SET = set("AILMVF")
+_CHARGED_SET    = set("DEKR")
+
+
+def feature_dim(include_indicators: bool = False, include_extended: bool = False) -> int:
     """Output dimensionality of the feature vector."""
-    return len(FEATURE_NAMES) + (len(INDICATOR_NAMES) if include_indicators else 0)
+    n = len(FEATURE_NAMES)
+    if include_indicators: n += len(INDICATOR_NAMES)
+    if include_extended:   n += len(EXTENDED_NAMES)
+    return n
 
 
-def feature_names(include_indicators: bool = False) -> list[str]:
-    """Ordered feature names produced by ``batch_features``."""
-    if include_indicators:
-        return list(FEATURE_NAMES) + list(INDICATOR_NAMES)
-    return list(FEATURE_NAMES)
+def feature_names(include_indicators: bool = False, include_extended: bool = False) -> list[str]:
+    """Ordered feature names produced by ``batch_features`` / ``batch_features_extended``."""
+    out = list(FEATURE_NAMES)
+    if include_indicators: out += list(INDICATOR_NAMES)
+    if include_extended:   out += list(EXTENDED_NAMES)
+    return out
 
 
 def _aa(c: str) -> str:
@@ -284,6 +315,112 @@ def batch_features(
             np.array([c in {"F", "W", "Y"} for c in mut], dtype=np.float32),
         ]
     return np.stack(parts, axis=1).astype(np.float32)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Extended sequence-derived features (need full sequence + mut_idx)
+# ─────────────────────────────────────────────────────────────────────────────
+def _local_window(seq: str, mut_idx: int, half_window: int) -> str:
+    """Extract a substring of length ≤ 2·half_window+1 centred on ``mut_idx``."""
+    lo = max(0, mut_idx - half_window)
+    hi = min(len(seq), mut_idx + half_window + 1)
+    return seq[lo:hi]
+
+
+def _shannon_entropy(s: str) -> float:
+    """Shannon entropy of AA frequencies in ``s`` (in bits, base 2)."""
+    if not s:
+        return 0.0
+    n = len(s)
+    counts: dict[str, int] = {}
+    for c in s:
+        counts[c] = counts.get(c, 0) + 1
+    p = np.array(list(counts.values()), dtype=np.float64) / n
+    return float(-(p * np.log2(p + 1e-12)).sum())
+
+
+def _count_in_set(s: str, charset: set[str]) -> int:
+    return sum(1 for c in s if c in charset)
+
+
+def batch_features_extended(
+    wt: list[str] | np.ndarray,
+    mut: list[str] | np.ndarray,
+    rsa: list[float] | np.ndarray,
+    sequences: list[str],
+    mut_indices: list[int] | np.ndarray,
+    *,
+    include_indicators: bool = False,
+    half_window_short: int = 5,
+    half_window_long:  int = 10,
+) -> np.ndarray:
+    """Extended feature builder: same 7 base features as ``batch_features`` plus
+    six sequence-derived structural proxies that don't need a PDB.
+
+    Extra features (in order):
+        - delta_helix_propensity      (Chou-Fasman P_α(mut) − P_α(wt))
+        - delta_sheet_propensity      (Chou-Fasman P_β(mut) − P_β(wt))
+        - local_entropy               (Shannon entropy in ±``half_window_long``)
+        - local_hydrophobic_count     (#{AILMVF} in ±``half_window_short``)
+        - local_charged_count         (#{DEKR} in ±``half_window_short``)
+        - position_relative           (mut_idx / max(seq_len-1, 1))
+
+    Parameters
+    ----------
+    wt, mut, rsa : iterables, length n   (single-letter AA codes for wt/mut)
+    sequences    : list of full protein sequences, length n
+    mut_indices  : 0-based mutation positions in ``sequences[i]``, length n
+    include_indicators : also append the 3 indicator features (mut is P / G / aromatic)
+
+    Returns
+    -------
+    (n, k) float32 array, k = ``feature_dim(include_indicators, include_extended=True)``.
+    """
+    base = batch_features(wt, mut, rsa, include_indicators=include_indicators)
+    n = base.shape[0]
+    if not (len(sequences) == len(mut_indices) == n):
+        raise ValueError(
+            f"sequences/mut_indices length mismatch: "
+            f"got {len(sequences)} / {len(mut_indices)}, expected {n}"
+        )
+
+    wt_arr  = [str(s).strip().upper() for s in wt]
+    mut_arr = [str(s).strip().upper() for s in mut]
+
+    d_helix = np.array(
+        [_HELIX_PROP[m] - _HELIX_PROP[w] for w, m in zip(wt_arr, mut_arr)],
+        dtype=np.float32,
+    )
+    d_sheet = np.array(
+        [_SHEET_PROP[m] - _SHEET_PROP[w] for w, m in zip(wt_arr, mut_arr)],
+        dtype=np.float32,
+    )
+
+    local_entropy = np.zeros(n, dtype=np.float32)
+    local_hydro   = np.zeros(n, dtype=np.float32)
+    local_charged = np.zeros(n, dtype=np.float32)
+    position_rel  = np.zeros(n, dtype=np.float32)
+
+    for i in range(n):
+        seq = str(sequences[i]).strip().upper()
+        mi  = int(mut_indices[i])
+        # Clamp into valid range; long sequences may be truncated upstream.
+        mi  = max(0, min(mi, max(len(seq) - 1, 0)))
+
+        long_win  = _local_window(seq, mi, half_window_long)
+        short_win = _local_window(seq, mi, half_window_short)
+
+        local_entropy[i] = _shannon_entropy(long_win)
+        local_hydro[i]   = float(_count_in_set(short_win, _HYDROPHOBIC_SET))
+        local_charged[i] = float(_count_in_set(short_win, _CHARGED_SET))
+        position_rel[i]  = mi / max(len(seq) - 1, 1)
+
+    extended = np.stack(
+        [d_helix, d_sheet, local_entropy, local_hydro, local_charged, position_rel],
+        axis=1,
+    ).astype(np.float32)
+
+    return np.concatenate([base, extended], axis=1)
 
 
 def standardize(

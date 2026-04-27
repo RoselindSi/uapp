@@ -69,7 +69,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from uapp.data import load_cached_embeddings
 from uapp.mutation_features import (
-    batch_features, feature_dim, feature_names, standardize,
+    batch_features, batch_features_extended,
+    feature_dim, feature_names, standardize,
 )
 from uapp.utils import setup_logging
 
@@ -105,10 +106,11 @@ def _pick_col(df: pd.DataFrame, *candidates: str) -> str:
     )
 
 
-def _load_metadata(csv_path: Path, rsa_col: str) -> pd.DataFrame:
+def _load_metadata(csv_path: Path, rsa_col: str, *, want_sequence: bool) -> pd.DataFrame:
     """Load the processed metadata CSV and return a tidy DataFrame.
 
-    Columns returned: wt (1-letter), mut (1-letter), rsa (float), split (str).
+    Columns returned: wt (1-letter), mut (1-letter), rsa (float), split (str),
+    plus sequence (str) and mut_idx (int) when ``want_sequence=True``.
     Raises clearly if expected columns are missing.
     """
     df = pd.read_csv(csv_path)
@@ -118,13 +120,18 @@ def _load_metadata(csv_path: Path, rsa_col: str) -> pd.DataFrame:
     rsa_col_ = _pick_col(df, rsa_col)
     spl_col  = _pick_col(df, "split", "set")
 
-    out = pd.DataFrame({
+    cols = {
         "wt":    _to_single_letter(df[wt_col]),
         "mut":   _to_single_letter(df[mut_col]),
         "rsa":   df[rsa_col_].astype(float),
         "split": df[spl_col].astype(str).str.strip().str.lower(),
-    })
-    return out
+    }
+    if want_sequence:
+        seq_col = _pick_col(df, "sequence", "seq")
+        idx_col = _pick_col(df, "mut_idx", "mutation_index")
+        cols["sequence"] = df[seq_col].astype(str)
+        cols["mut_idx"]  = df[idx_col].astype(int)
+    return pd.DataFrame(cols)
 
 
 def _auto_discover_metadata(embeddings_path: Path) -> Path | None:
@@ -146,6 +153,11 @@ def main() -> None:
                    help="Column name for relative solvent accessibility (default: rel_rsa)")
     p.add_argument("--include-indicators", action="store_true",
                    help="Also emit P/G/aromatic-mut indicator features (k=10 instead of 7)")
+    p.add_argument("--include-extended", action="store_true",
+                   help="Append 6 sequence-derived structural-proxy features: "
+                        "Δhelix-prop, Δsheet-prop, local-entropy, hydrophobic-count, "
+                        "charged-count, position-relative.  Total k=13 (or 16 with indicators).  "
+                        "Requires `sequence` and `mut_idx` columns in the metadata CSV.")
     p.add_argument("--log-level",     default="INFO")
     args = p.parse_args()
 
@@ -173,7 +185,7 @@ def main() -> None:
     log.info("Embedding-cache split sizes: %s", cache_sizes)
 
     # ── Load and validate metadata ────────────────────────────────────────────
-    md = _load_metadata(metadata_csv, args.rsa_col)
+    md = _load_metadata(metadata_csv, args.rsa_col, want_sequence=args.include_extended)
     log.info("Loaded %d metadata rows from %s", len(md), metadata_csv)
 
     grouped = {s: g.reset_index(drop=True) for s, g in md.groupby("split")}
@@ -200,12 +212,22 @@ def main() -> None:
     raw: dict[str, np.ndarray] = {}
     for split in cache_sizes:
         g = grouped[split]
-        feats = batch_features(
-            g["wt"].tolist(),
-            g["mut"].tolist(),
-            g["rsa"].to_numpy(),
-            include_indicators=args.include_indicators,
-        )
+        if args.include_extended:
+            feats = batch_features_extended(
+                g["wt"].tolist(),
+                g["mut"].tolist(),
+                g["rsa"].to_numpy(),
+                sequences=g["sequence"].tolist(),
+                mut_indices=g["mut_idx"].to_numpy(),
+                include_indicators=args.include_indicators,
+            )
+        else:
+            feats = batch_features(
+                g["wt"].tolist(),
+                g["mut"].tolist(),
+                g["rsa"].to_numpy(),
+                include_indicators=args.include_indicators,
+            )
         raw[split] = feats
         log.info("  %s: bio-feature tensor shape %s", split, feats.shape)
 
@@ -224,11 +246,12 @@ def main() -> None:
         for split, v in standardised.items()
     }
     payload["meta"] = {
-        "feature_names":      feature_names(args.include_indicators),
-        "k":                  feature_dim(args.include_indicators),
+        "feature_names":      feature_names(args.include_indicators, args.include_extended),
+        "k":                  feature_dim(args.include_indicators, args.include_extended),
         "mu":                 mu.tolist(),
         "sd":                 sd.tolist(),
         "include_indicators": bool(args.include_indicators),
+        "include_extended":   bool(args.include_extended),
         "source_metadata":    str(metadata_csv),
         "source_embeddings":  str(args.embeddings),
     }
