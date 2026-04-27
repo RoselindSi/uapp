@@ -64,7 +64,7 @@ from uapp.evaluate import (
     compute_top_k_risk_capture,
 )
 from uapp.heads import FeatureAugmentedHead
-from uapp.losses import student_t_nll_loss
+from uapp.losses import student_t_nll_loss, uncertainty_ranking_loss
 from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 
 
@@ -129,6 +129,8 @@ def train_one(
     nu: float,
     log,
     label: str,
+    ranking_lambda: float = 0.0,
+    ranking_margin: float = 0.05,
 ) -> FeatureAugmentedHead:
     """Single-stage training under Student-t NLL."""
     import copy
@@ -150,6 +152,10 @@ def train_one(
             opt.zero_grad()
             mu, sigma = head(xb, eb)
             loss = student_t_nll_loss(mu, sigma, yb, nu=nu)
+            if ranking_lambda > 0.0:
+                loss = loss + ranking_lambda * uncertainty_ranking_loss(
+                    pred_mean=mu, pred_sigma=sigma, target=yb, margin=ranking_margin,
+                )
             loss.backward()
             opt.step()
 
@@ -265,6 +271,10 @@ def main() -> None:
     p.add_argument("--patience",   type=int,   default=25)
     p.add_argument("--nu",         type=float, default=3.0,
                    help="Student-t degrees of freedom (fixed for clean attribution)")
+    p.add_argument("--ranking-lambda", type=float, default=0.0,
+                   help="Pairwise ranking loss weight (0 = NLL only).  "
+                        "Recommended 0.05 to push σ-branch ranking on frozen backbone.")
+    p.add_argument("--ranking-margin", type=float, default=0.05)
     p.add_argument("--seed",       type=int,   default=42)
     p.add_argument("--device",     type=str,   default="auto",
                    help="auto | cpu | cuda | mps   (default: auto)")
@@ -330,6 +340,7 @@ def main() -> None:
             max_epochs=args.max_epochs, lr=args.lr,
             weight_decay=args.weight_decay, patience=args.patience,
             nu=args.nu, log=log, label=ablation,
+            ranking_lambda=args.ranking_lambda, ranking_margin=args.ranking_margin,
         )
 
         # Test-set predictions

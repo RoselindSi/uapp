@@ -63,6 +63,8 @@ def run_one_seed(seed: int, args, out_subdir: Path) -> list[dict]:
         "--max-epochs", str(args.max_epochs),
         "--patience",   str(args.patience),
         "--device",     args.device,
+        "--ranking-lambda", str(args.ranking_lambda),
+        "--ranking-margin", str(args.ranking_margin),
         "--log-level",  "WARNING",
     ]
     subprocess.run(cmd, check=True)
@@ -128,6 +130,9 @@ def main() -> None:
     p.add_argument("--patience",   type=int, default=25)
     p.add_argument("--device",     type=str, default="auto",
                    help="auto | cpu | cuda | mps  (passed through to script 07)")
+    p.add_argument("--ranking-lambda", type=float, default=0.0,
+                   help="Pairwise ranking loss weight (0 = NLL only); passed to script 07")
+    p.add_argument("--ranking-margin", type=float, default=0.05)
     p.add_argument("--keep-per-seed-dirs", action="store_true",
                    help="Keep per-seed output dirs (default: clean up to save disk)")
     args = p.parse_args()
