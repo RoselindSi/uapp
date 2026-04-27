@@ -33,8 +33,8 @@ Architecture
 4. Forward sequence → per-residue embeddings (with LoRA).
 5. Build per-mutation feature: [h_site, h_window, e(wtAA), e(mutAA)].
 6. Pass through FeatureAugmentedHead (D3 = 7 extras: RSA + 6 chemistry).
-7. Loss = Student-t NLL (ν=3).  Gradients flow through head → LoRA only;
-   base ESM2 weights stay frozen.
+7. Loss = Student-t NLL (ν=3) [+ optional ranking-aware penalty].
+   Gradients flow through head → LoRA only; base ESM2 weights stay frozen.
 
 Compute estimate (M-series MPS, batch_size=8, 20 epochs)
 ========================================================
@@ -58,6 +58,12 @@ Usage
         --bio-feats    cache/t2837_bio_features_650m.pt \\
         --out          outputs/lora_d3_650m \\
         --device mps --batch-size 8 --max-epochs 20
+
+    # With ranking-aware loss (combats σ variance collapse on LoRA-tuned
+    # backbones — see the post-LoRA diagnostic in scripts/08).
+    python scripts/12_lora_finetune_d3.py \\
+        ... \\
+        --ranking-lambda 0.05 --ranking-margin 0.05
 """
 from __future__ import annotations
 
