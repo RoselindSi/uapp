@@ -33,8 +33,8 @@ Architecture
 4. Forward sequence → per-residue embeddings (with LoRA).
 5. Build per-mutation feature: [h_site, h_window, e(wtAA), e(mutAA)].
 6. Pass through FeatureAugmentedHead (D3 = 7 extras: RSA + 6 chemistry).
-7. Loss = Student-t NLL (ν=3).  Gradients flow through head → LoRA only;
-   base ESM2 weights stay frozen.
+7. Loss = Student-t NLL (ν=3) [+ optional ranking-aware penalty].
+   Gradients flow through head → LoRA only; base ESM2 weights stay frozen.
 
 Compute estimate (M-series MPS, batch_size=8, 20 epochs)
 ========================================================
@@ -58,6 +58,12 @@ Usage
         --bio-feats    cache/t2837_bio_features_650m.pt \\
         --out          outputs/lora_d3_650m \\
         --device mps --batch-size 8 --max-epochs 20
+
+    # With ranking-aware loss (combats σ variance collapse on LoRA-tuned
+    # backbones — see the post-LoRA diagnostic in scripts/08).
+    python scripts/12_lora_finetune_d3.py \\
+        ... \\
+        --ranking-lambda 0.05 --ranking-margin 0.05
 """
 from __future__ import annotations
 
@@ -82,7 +88,7 @@ from uapp.evaluate import (
     compute_spearman_sigma_error, compute_top_k_risk_capture,
 )
 from uapp.heads import FeatureAugmentedHead
-from uapp.losses import student_t_nll_loss
+from uapp.losses import student_t_nll_loss, uncertainty_ranking_loss
 from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 
 
@@ -215,6 +221,7 @@ def build_mutation_features(
 def run_epoch(
     backbone, head, loader, optimizer, device,
     *, train: bool, nu: float,
+    ranking_lambda: float = 0.0, ranking_margin: float = 0.05,
 ) -> tuple[float, np.ndarray, np.ndarray, np.ndarray]:
     backbone.train(train); head.train(train)
     total_loss, total_n = 0.0, 0
@@ -240,7 +247,15 @@ def run_epoch(
             extras = torch.cat([batch["rsa"], batch["chemistry"]], dim=-1).float()
 
             mu, sigma = head(feats, extras)
-            loss = student_t_nll_loss(mu, sigma, batch["y"].float(), nu=nu)
+            base = student_t_nll_loss(mu, sigma, batch["y"].float(), nu=nu)
+            if ranking_lambda > 0.0 and train:
+                rank = uncertainty_ranking_loss(
+                    pred_mean=mu, pred_sigma=sigma,
+                    target=batch["y"].float(), margin=ranking_margin,
+                )
+                loss = base + ranking_lambda * rank
+            else:
+                loss = base
 
             if train:
                 loss.backward()
@@ -300,6 +315,10 @@ def main() -> None:
     p.add_argument("--weight-decay", type=float, default=1e-5)
     p.add_argument("--patience",     type=int, default=5)
     p.add_argument("--nu",           type=float, default=3.0)
+    p.add_argument("--ranking-lambda", type=float, default=0.0,
+                   help="Pairwise ranking loss weight (0 = NLL only).  "
+                        "Recommended 0.05–0.10 to combat σ-branch variance collapse.")
+    p.add_argument("--ranking-margin", type=float, default=0.05)
 
     p.add_argument("--seed",         type=int, default=42)
     p.add_argument("--device",       type=str, default="auto")
@@ -412,9 +431,11 @@ def main() -> None:
         ep_t0 = time.time()
         train_loss, _, _, _ = run_epoch(
             backbone, head, train_loader, opt, device, train=True, nu=args.nu,
+            ranking_lambda=args.ranking_lambda, ranking_margin=args.ranking_margin,
         )
         val_loss, _, _, _ = run_epoch(
             backbone, head, val_loader, None, device, train=False, nu=args.nu,
+            ranking_lambda=args.ranking_lambda, ranking_margin=args.ranking_margin,
         )
         ep_dur = time.time() - ep_t0
         history.append({"epoch": epoch, "train_loss": train_loss,
