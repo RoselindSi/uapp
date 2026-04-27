@@ -77,10 +77,12 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # Bio-feature slicing — must match scripts/07_experiment_d_real.py
 # ─────────────────────────────────────────────────────────────────────────────
 RSA_IDX = 0
-BIO_IDX = list(range(1, 7))  # blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
+    """Slice columns of the bio-feature tensor for one of D0..D5.  See script 07."""
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -89,6 +91,16 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         return feats[:, BIO_IDX]
     if ablation == "D3":
         return feats[:, [RSA_IDX] + BIO_IDX]
+    if ablation in ("D4", "D5"):
+        if feats.shape[-1] < 13:
+            raise ValueError(
+                f"ablation {ablation!r} requires extended bio features (k=13); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/06_build_bio_features.py with --include-extended."
+            )
+        if ablation == "D4":
+            return feats[:, EXT_IDX]
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -180,7 +192,7 @@ def within_fold_val_split(
     rng.shuffle(train_pdbs)
     n_val = max(1, int(len(train_pdbs) * val_frac))
     val_pdbs = set(train_pdbs[:n_val].tolist())
-    val_mask  = np.array([pdb_codes[i] in val_pdbs for i in train_idx])
+    val_mask  = np.array([pdb_codes[i] in val_pdbs for i in train_idx], dtype=bool)
     return train_idx[~val_mask], train_idx[val_mask]
 
 
@@ -300,7 +312,8 @@ def main() -> None:
                    help="Default: auto-discover next to --embeddings")
     p.add_argument("--out",         required=True, type=Path)
     p.add_argument("--ablations",   nargs="+", default=["D0", "D1", "D2", "D3"],
-                   choices=["D0", "D1", "D2", "D3"])
+                   choices=["D0", "D1", "D2", "D3", "D4", "D5"],
+                   help="D4/D5 require an --include-extended bio-feats file.")
     p.add_argument("--folds",       type=int, default=5)
     p.add_argument("--seeds",       type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--fold-seed",   type=int, default=42,

@@ -73,7 +73,8 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # ─────────────────────────────────────────────────────────────────────────────
 # Indices in the standardised feature vector produced by mutation_features.
 RSA_IDX = 0
-BIO_IDX = list(range(1, 7))  # blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
 
 
 def load_bio_feats(path: Path) -> tuple[dict, dict]:
@@ -84,7 +85,15 @@ def load_bio_feats(path: Path) -> tuple[dict, dict]:
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
-    """Slice columns of the bio-feature tensor for one of D0/D1/D2/D3."""
+    """Slice columns of the bio-feature tensor for one of D0..D5.
+
+    D0  no extras (baseline)
+    D1  RSA only
+    D2  chemistry only            (BLOSUM/Grantham/Δcharge/Δpolarity/Δhydro/Δvolume)
+    D3  RSA + chemistry           (k=7, original Track-D winner)
+    D4  structural-only           (k=6,  requires --include-extended bio file)
+    D5  RSA + chemistry + struct  (k=13, requires --include-extended bio file)
+    """
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -93,6 +102,16 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         return feats[:, BIO_IDX]
     if ablation == "D3":
         return feats[:, [RSA_IDX] + BIO_IDX]
+    if ablation in ("D4", "D5"):
+        if feats.shape[-1] < 13:
+            raise ValueError(
+                f"ablation {ablation!r} requires extended bio features (k=13); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/06_build_bio_features.py with --include-extended."
+            )
+        if ablation == "D4":
+            return feats[:, EXT_IDX]
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -280,7 +299,8 @@ def main() -> None:
                    help="auto | cpu | cuda | mps   (default: auto)")
     p.add_argument("--log-level",  type=str,   default="INFO")
     p.add_argument("--ablations",  nargs="+",  default=["D0", "D1", "D2", "D3"],
-                   choices=["D0", "D1", "D2", "D3"])
+                   choices=["D0", "D1", "D2", "D3", "D4", "D5"],
+                   help="Ablations to run.  D4/D5 require an --include-extended bio-feats file.")
     args = p.parse_args()
 
     log = setup_logging(args.log_level)

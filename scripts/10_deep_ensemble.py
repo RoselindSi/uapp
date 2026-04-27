@@ -85,10 +85,12 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # Bio-feature slicing — must match scripts/07_experiment_d_real.py exactly
 # ─────────────────────────────────────────────────────────────────────────────
 RSA_IDX = 0
-BIO_IDX = list(range(1, 7))  # blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
+    """Slice columns of the bio-feature tensor for one of D0..D5.  See script 07."""
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -97,6 +99,16 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         return feats[:, BIO_IDX]
     if ablation == "D3":
         return feats[:, [RSA_IDX] + BIO_IDX]
+    if ablation in ("D4", "D5"):
+        if feats.shape[-1] < 13:
+            raise ValueError(
+                f"ablation {ablation!r} requires extended bio features (k=13); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/06_build_bio_features.py with --include-extended."
+            )
+        if ablation == "D4":
+            return feats[:, EXT_IDX]
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -196,7 +208,8 @@ def main() -> None:
     p.add_argument("--embeddings", required=True, type=Path)
     p.add_argument("--bio-feats",  required=True, type=Path)
     p.add_argument("--out",        required=True, type=Path)
-    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3"], default="D1")
+    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5"], default="D1",
+                   help="D4/D5 require an --include-extended bio-feats file.")
     p.add_argument("--members",    type=int, default=5)
     p.add_argument("--seed",       type=int, default=42, help="seed for member 0; member k uses seed+k")
     p.add_argument("--batch-size", type=int, default=128)
