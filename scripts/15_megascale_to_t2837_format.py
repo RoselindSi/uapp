@@ -145,12 +145,13 @@ def main() -> None:
     log.info("Read %d raw rows; columns: %s", len(df), list(df.columns))
 
     # ── Resolve column names ─────────────────────────────────────────────────
-    name_col   = _pick(df, "name", "protein_name", "domain", "WT_name")
-    # NB: prefer aa_seq_full first.  In the Tsuboyama 2023 dataset the
-    # mut_type position (e.g. "I7L") is numbered against `aa_seq_full`
-    # (which includes the proteolysis tag prefix), not the shorter `aa_seq`.
+    # In Tsuboyama 2023 the per-row `aa_seq` / `aa_seq_full` already has the
+    # mutation applied — they aren't WT sequences.  The right way to validate
+    # mut_type positions is to look up the WT sequence per protein from rows
+    # where mut_type == "wt", keyed by `WT_name` (or `name` as fallback).
+    name_col   = _pick(df, "WT_name", "name", "protein_name", "domain")
     seq_col    = (args.seq_col or
-                  _pick(df, "aa_seq_full", "aa_seq", "sequence",
+                  _pick(df, "aa_seq", "aa_seq_full", "sequence",
                         "wt_seq", "wt_aa_seq"))
     mut_col    = _pick(df, "mut_type", "mutation", "variant", "mutation_type")
     ddg_col    = args.ddg_col or _pick(
@@ -168,35 +169,44 @@ def main() -> None:
     log.info("Resolved columns: name=%s, seq=%s, mut=%s, ddg/dg=%s",
              name_col, seq_col, mut_col, ddg_col)
 
-    # ── Quick alignment sanity-check on the chosen seq column.  If it fails
-    #    on a sample of SAVs, automatically try the alternative (aa_seq vs
-    #    aa_seq_full) before doing the full pass.
-    def _alignment_rate(df_sample, seq_column):
-        ok = 0; tried = 0
-        for _, r in df_sample.iterrows():
-            parsed = parse_mut_type(r[mut_col])
-            if parsed is None: continue
-            wt_aa, pos, _ = parsed
-            seq = str(r[seq_column]).strip().upper()
-            if 1 <= pos <= len(seq) and seq[pos - 1] == wt_aa:
-                ok += 1
-            tried += 1
-            if tried >= 200: break
-        return ok / max(tried, 1)
+    # ── Build per-protein WT sequence lookup from rows where mut_type == 'wt'.
+    #    The dataset stores PER-VARIANT sequences (already mutated) in the seq
+    #    column, so we cannot validate positions against the row's own seq.
+    #    Instead: for each WT row, register name → seq, then validate SAV
+    #    positions against the registered WT seq.
+    wt_mask = df[mut_col].astype(str).str.lower().isin(
+        ("wt", "wildtype", "wild-type", "ref")
+    )
+    log.info("Building per-protein WT sequence lookup from %d wt rows ...",
+             int(wt_mask.sum()))
+    wt_seq_lookup: dict[str, str] = {}
+    for _, r in df[wt_mask].iterrows():
+        nm = str(r[name_col]); s = str(r[seq_col]).strip().upper()
+        # Pick the longest seq if multiple wt rows per protein
+        if nm not in wt_seq_lookup or len(s) > len(wt_seq_lookup[nm]):
+            wt_seq_lookup[nm] = s
+    log.info("WT-sequence lookup: %d proteins.  (df has %d unique %s values)",
+             len(wt_seq_lookup), df[name_col].nunique(), name_col)
 
+    # ── Sanity-check: how many SAVs align with their protein's WT seq? ──────
     sample = df.sample(n=min(2000, len(df)), random_state=0)
-    rate = _alignment_rate(sample, seq_col)
-    log.info("Alignment sanity-check: %.1f%% of sampled SAVs match seq column %r",
-             100 * rate, seq_col)
-    if rate < 0.5 and args.seq_col is None:
-        # Fall back to the alternative
-        alt = _pick(df, "aa_seq" if seq_col == "aa_seq_full" else "aa_seq_full")
-        if alt is not None and alt != seq_col:
-            alt_rate = _alignment_rate(sample, alt)
-            log.info("Trying alternative seq column %r: %.1f%% match", alt, 100 * alt_rate)
-            if alt_rate > rate:
-                log.info("Switching seq column to %r (better alignment)", alt)
-                seq_col = alt
+    ok = tried = 0
+    for _, r in sample.iterrows():
+        parsed = parse_mut_type(r[mut_col])
+        if parsed is None: continue
+        wt_aa, pos, _ = parsed
+        nm = str(r[name_col])
+        wt_seq = wt_seq_lookup.get(nm)
+        if wt_seq is None: tried += 1; continue
+        if 1 <= pos <= len(wt_seq) and wt_seq[pos - 1] == wt_aa:
+            ok += 1
+        tried += 1
+    rate = ok / max(tried, 1)
+    log.info("WT-seq alignment sanity-check: %.1f%% of sampled SAVs match",
+             100 * rate)
+    if rate < 0.30:
+        log.warning("Alignment rate is low.  The chosen `seq` column may not "
+                    "store the canonical WT sequence — try --seq-col aa_seq_full.")
 
     # ── Compute ΔΔG (pair each mutant with its wt) if we got a ΔG column ────
     is_ddg = ddg_col.lower().startswith("ddg")
@@ -216,13 +226,19 @@ def main() -> None:
     n_skipped_not_sav = 0
     n_skipped_seq_mismatch = 0
     n_skipped_no_wt_dG = 0
+    n_skipped_no_wt_seq = 0
     for _, row in df.iterrows():
         parsed = parse_mut_type(row[mut_col])
         if parsed is None:
             n_skipped_not_sav += 1; continue
         wt_aa, pos, mut_aa = parsed
 
-        seq = str(row[seq_col]).strip().upper()
+        # Look up WT sequence by protein name (NOT the row's own seq column —
+        # those are already mutated in Tsuboyama 2023).
+        nm = str(row[name_col])
+        seq = wt_seq_lookup.get(nm)
+        if seq is None:
+            n_skipped_no_wt_seq += 1; continue
         if pos < 1 or pos > len(seq) or seq[pos - 1] != wt_aa:
             n_skipped_seq_mismatch += 1; continue
 
@@ -251,8 +267,12 @@ def main() -> None:
             "dataset":   "megascale",
         })
 
-    log.info("Kept %d SAV rows.  Skipped: %d not-SAV, %d seq-mismatch, %d missing wt ΔG",
-             len(out_rows), n_skipped_not_sav, n_skipped_seq_mismatch, n_skipped_no_wt_dG)
+    log.info(
+        "Kept %d SAV rows.  Skipped: %d not-SAV, %d no-wt-seq-for-protein, "
+        "%d seq-mismatch (pos out of range or wt_aa wrong), %d missing wt ΔG",
+        len(out_rows), n_skipped_not_sav, n_skipped_no_wt_seq,
+        n_skipped_seq_mismatch, n_skipped_no_wt_dG,
+    )
 
     if not out_rows:
         raise SystemExit("No usable rows after parsing.  Check --megascale-csv format.")
