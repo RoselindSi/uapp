@@ -469,11 +469,20 @@ def main() -> None:
     log.info("Saved %s", out_dir / "aggregate.csv")
 
     # ── Paired stats: D1/D2/D3 vs D0 over per-(fold,seed) Spearman/ICE/NLL ──
+    # Compute paired tests for every ordered pair of ablations (challenger,
+    # baseline) where the order in --ablations defines the direction:
+    # later → challenger, earlier → baseline.  This means passing
+    # ``--ablations D0 D3 D5`` produces D3_vs_D0, D5_vs_D0, and D5_vs_D3.
+    pairs = [
+        (args.ablations[i], args.ablations[j])
+        for i in range(len(args.ablations))
+        for j in range(i + 1, len(args.ablations))
+    ]
     sig = {}
     for metric in ["spearman", "ice", "nll", "top0.20", "rmse"]:
         sig[metric] = {
-            f"{c}_vs_D0": paired_test(per, "D0", c, metric)
-            for c in ["D1", "D2", "D3"] if c in args.ablations
+            f"{chal}_vs_{base}": paired_test(per, base, chal, metric)
+            for (base, chal) in pairs
         }
     (out_dir / "significance.json").write_text(json.dumps(sig, indent=2))
     log.info("Saved %s", out_dir / "significance.json")
@@ -499,23 +508,23 @@ def main() -> None:
             print(f"{r['ablation']:<6} {int(r['seed']):>4} {r['rmse']:9.4f} "
                   f"{r['nll']:9.4f} {r['ice']:9.4f} {r['spearman']:10.4f} {r['top0.20']:9.4f}")
 
-    print("\nPaired tests on Spearman  (challenger − D0, paired by (fold,seed)):\n")
-    print(f"{'comparison':<14} {'mean Δ':>10} {'p (t-test)':>12} {'p (Wilcoxon)':>14} {'wins':>10}")
+    print("\nPaired tests on Spearman  (challenger − baseline, paired by (fold,seed)):\n")
+    print(f"{'comparison':<16} {'mean Δ':>10} {'p (t-test)':>12} {'p (Wilcoxon)':>14} {'wins':>10}")
     for k_, v in sig["spearman"].items():
         if "skipped" in v:
-            print(f"{k_:<14} {v['skipped']}"); continue
+            print(f"{k_:<16} {v['skipped']}"); continue
         wins = f"{v['wins_for_challenger']}/{v['n']}"
         star = " *" if v["t_p_two_sided"] < 0.05 else ""
-        print(f"{k_:<14} {v['mean_diff']:+10.4f} {v['t_p_two_sided']:12.4f} "
+        print(f"{k_:<16} {v['mean_diff']:+10.4f} {v['t_p_two_sided']:12.4f} "
               f"{v['wilcoxon_p_two_sided']:14.4f} {wins:>10}{star}")
 
     print("\nDecision (Spearman, α = 0.05):")
-    for c in ["D1", "D2", "D3"]:
-        v = sig["spearman"].get(f"{c}_vs_D0")
-        if v is None or "skipped" in v: continue
-        verdict = ("BEATS D0" if v["t_p_two_sided"] < 0.05 and v["mean_diff"] > 0
+    for k_, v in sig["spearman"].items():
+        if "skipped" in v: continue
+        # k_ is 'CHAL_vs_BASE'; verdict is "CHAL beats BASE" if positive + significant
+        verdict = ("BEATS baseline" if v["t_p_two_sided"] < 0.05 and v["mean_diff"] > 0
                    else "no significant difference")
-        print(f"  {c}: {verdict}  (Δ={v['mean_diff']:+.4f}, p={v['t_p_two_sided']:.3f})")
+        print(f"  {k_}: {verdict}  (Δ={v['mean_diff']:+.4f}, p={v['t_p_two_sided']:.3f})")
     print("=" * 92)
 
 

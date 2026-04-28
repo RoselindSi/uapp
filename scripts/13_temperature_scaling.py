@@ -220,7 +220,8 @@ def main() -> None:
                    help="If supplied, skip training and read val/test predictions from this npz "
                         "(keys: val_mu, val_sigma, val_y, test_mu, test_sigma, test_y).")
     p.add_argument("--out",        required=True, type=Path)
-    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3"], default="D3")
+    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5"], default="D3",
+                   help="D4/D5 require a bio-feats file built with --include-extended.")
 
     # Training hyperparameters (used when --predictions-npz is not given)
     p.add_argument("--batch-size",     type=int,   default=128)
