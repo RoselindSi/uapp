@@ -174,6 +174,7 @@ Attempted LoRA on ESM2-650M (rank 8, α 16, attention query+value, end-to-end wi
 | **D4 (structural-only)**     | Spearman 0.235 (worse than D0 0.251) | Structural proxies stand-alone don't carry signal — only useful in combination |
 | **D5 vs D3 K-fold paired-t** | p ≈ 0.21 | Effect size +0.011 is below noise floor at K = 25 paired obs |
 | **D6 (real DSSP/pLDDT) vs D5 (sequence proxies)** | Δ Spearman = −0.009, p = 0.31 | The cheap proxies already captured the signal; real DSSP added a bit of noise on small n_train |
+| **Megascale pretrain → T2837 fine-tune** (single seed) | RMSE 1.67, NLL 2.22, Spearman 0.21 (vs frozen D5 0.348) | Pretrain val_loss bottomed at epoch 1 then rose; fine-tune had to undo the domain-shift prior. The 650M embeddings + 13 D5 features already saturate on T2837 — adding 276 K Megascale rows did not lift the ceiling. T2837's `n_test = 170` is the binding constraint, not training-data volume. |
 
 These should appear in the discussion section of any writeup. The pattern
 ("σ-branch has a ceiling that scales with the backbone, not with the
@@ -187,13 +188,13 @@ loss function or feature richness") is itself the take-away.
 2. **ICE = 0.041 missed the ≤ 0.02 target** by ~2×, though best individual D6 member hit 0.025. Temperature scaling on NLL is a no-op (σ already NLL-optimal), so closing the gap requires isotonic regression / quantile-based recalibration — not implemented.
 3. **D5 vs D6 is statistically inconclusive.** Both are within noise of each other on every metric.
 4. **DSSP/pLDDT coverage is 82.9%** (441 mutations have NaN-imputed structural features because their uniprot_id was not in AF DB). For those rows D6 falls back to D5-equivalent behaviour.
-5. **No external validation.** Have not tested on S669 or other held-out ddG datasets. Cross-dataset generalisation is unverified.
+5. **No external validation merged yet.** S669 evaluation script is in flight (scripts/17 + 18 below); cross-dataset generalisation numbers will be appended once that lands.
 
 ## 8. Future work (ROI-ranked)
 
 | Direction | Expected lift | Cost |
 |---|---|---|
-| **Megascale pretrain** (Tsuboyama 2023, ~700K mutations), fine-tune head only on T2837 | +0.10+ Spearman, possible RMSE drop | 2–3 days data + training |
+| ~~**Megascale pretrain** (Tsuboyama 2023, ~700K mutations)~~ | **Tried, did not help** — see negative-results table | — |
 | **Isotonic regression on val coverage** for ICE recalibration | ICE 0.041 → ~0.02 (target met) | ½ day, RMSE/Spearman unchanged |
 | **More seeds** (K-fold with 10–20 seeds) | Tightens CIs, may lift D5-vs-D3 to significance | Cheap (extra Colab compute) |
 | **Two-stage warm-start LoRA** | Speculative; unblocks LoRA path if it works | 1 day |
@@ -268,6 +269,10 @@ Output of step 4 contains the statistical-significance JSON in `significance.jso
 | `scripts/12_lora_finetune_d3.py`        | LoRA fine-tune on ESM2-650M (negative result) |
 | `scripts/13_temperature_scaling.py`     | Post-hoc σ rescaling (no-op on frozen 650M; archived for completeness) |
 | `scripts/14_compute_structural_features.py` | DSSP + pLDDT from AlphaFold DB → k = 21 bio features |
+| `scripts/15_megascale_to_t2837_format.py` | Tsuboyama 2023 Megascale CSV → T2837-shaped CSV (used for pretrain corpus) |
+| `scripts/16_pretrain_and_finetune.py` | Pretrain D5 head on Megascale, fine-tune on T2837 (negative result, see §6) |
+| `scripts/17_s669_to_t2837_format.py` | S669 release CSV → T2837-shaped CSV for external evaluation |
+| `scripts/18_evaluate_on_s669.py` | Train D6 ensemble on full T2837, predict on S669, report metrics |
 | `notebooks/next_steps_comprehensive.ipynb`  | NEXT_STEPS Tracks A–D walkthrough on synthetic data |
 | `notebooks/colab_lora_finetune_d3.ipynb`    | Colab T4 notebook for LoRA fine-tune |
 
