@@ -36,6 +36,9 @@ themselves the contribution: they show *where the ceiling is*).
 | LoRA D3 (negative result)                 | 1.47 | 1.04 | 1.83 | 0.04 | 0.85 | 0.91 | 0.06 | 0.24 |
 | **650M D5 ensemble — S669 external (n = 617)**  | 2.83 | 2.29 | 4.64 | 0.31 | 0.37 | 0.45 | **0.434** | 0.38 |
 | 650M D5 ensemble — S669 + temperature-scaled σ (eval n = 309) | 2.82 | — | **2.37** | **0.04** | **0.92** | 0.99 | 0.449 | — |
+| **SaProt D5 ensemble — T2837 test (n = 137)** | 1.60 | — | 1.89 | 0.04 | — | — | 0.218 | 0.48 |
+| **SaProt D5 ensemble — S669 (n = 615)** | **2.53** | — | **3.19** | 0.26 | — | — | 0.416 | 0.45 |
+| SaProt — S669 + temperature-scaled σ (eval n = 307) | 2.46 | — | **2.27** | **0.05** | **0.94** | 0.99 | 0.440 | — |
 
 > The LoRA row's RMSE/NLL/ICE *look* better but the σ-branch ranking signal was destroyed (Spearman 0.06).
 > The D6 row wins 3 of 4 production metrics; D5 retains the best Spearman.
@@ -359,19 +362,70 @@ The campaign so far changed the **dataset** twice (Megascale pretrain, S669 eval
 
 Whichever backbone we try, the σ-ranking property gives a clean evaluation lever: if a new backbone preserves Spearman(σ, |err|) on S669 *and* drops RMSE, that's a strict improvement over the current production model.
 
-## 12. Structure-aware backbone (in flight)
+## 12. Structure-aware backbone (SaProt) — partial finding
 
-The §11 finding that μ-accuracy doesn't transfer cross-dataset while σ-ranking and σ-calibration do points squarely at the encoder. ESM2-650M was held fixed for the entire campaign — every variation so far was on the head, the loss, or the data. The first natural axis we have not exercised is the encoder.
+The §11 split-of-skills result pointed at the encoder as the next axis to vary. ESM2-650M was held fixed for the entire campaign; every prior variation was on the head, the loss, or the data. This section runs the encoder swap.
 
 `scripts/20_cache_embeddings_saprot.py` + `notebooks/colab_saprot_evaluation.ipynb` implement a drop-in swap to **SaProt** (Westlake/SJTU 2024), a structure-augmented PLM that takes combined `<aa><3di>` tokens, where the 3Di letters come from FoldSeek's structural tokenisation of a PDB. SaProt has the same hidden size (1280) and parameter count (650M) as ESM2-650M, so every downstream script (06, 18, 19) works unchanged.
 
-Why both T2837 and S669 are evaluated, not just S669:
+### Setup
 
-1. **In-distribution baseline.** Without T2837 we cannot tell whether SaProt is genuinely improving or just shifting the basin. The strict-improvement criterion needs both halves: T2837 RMSE ≤ 1.50 and Spearman ≥ 0.348 *and* S669 RMSE significantly < 2.83.
-2. **Recalibration scalar is encoder-specific.** T = 2.76 was fitted on ESM2's S669 σ. SaProt may have a different scale — the recalibration must be re-fitted before any "calibration transfers" claim can be made.
-3. **σ-ranking property is the most fragile.** SaProt's combined AA+3Di tokens change what the σ branch sees; we need to verify that Spearman(σ, |err|) ≥ 0.348 on T2837 *survives* the encoder swap before we can ask whether it improves on S669.
+Per-protein PDB resolution:
+- T2837: AlphaFold-DB models cached by scripts/14, keyed by `uniprot_id` (`AF-{uniprot_id}.pdb`). 100/108 proteins matched (8 uniprot_ids 404 on the AF API — retired or replaced entries).
+- S669: WT PDBs bundled in the Zenodo release. The `pdb_code` column is the original `Protein` value from the S669 CSV (e.g. `1a0fA` = PDB id + chain), while the bundled file is named after just the PDB id (e.g. `1a0f.pdb`); a small filename-resolver step (notebook cell 4a) maps one to the other. 90/90 proteins matched.
 
-Numbers will be appended here once the Colab notebook completes its run.
+The script re-resolves `mut_idx` against the **PDB-derived AA string** (not the metadata sequence) before sampling embeddings — without this, ~80% of T2837 rows would land at the wrong residue because AlphaFold-DB models are often shifted vs the T2837 metadata sequence (signal peptides cleaved, chain offsets). Final alignment rates: T2837 2129/2145 (99.3%), S669 615/615 (100.0%).
+
+### Results
+
+```
+Encoder comparison — ESM2-650M (§11) vs SaProt (this section)
+
+T2837 test (n_ESM2 = 170; n_SaProt = 137 — see caveat below)
+  ESM2-650M:   RMSE 1.500   NLL 1.850   ICE 0.050   Spearman 0.348
+  SaProt:      RMSE 1.598   NLL 1.889   ICE 0.038   Spearman 0.218
+
+S669 (n_ESM2 = 617; n_SaProt = 615)
+  ESM2-650M:   RMSE 2.830   NLL 4.640   ICE 0.310   Spearman 0.434
+  SaProt:      RMSE 2.534   NLL 3.185   ICE 0.261   Spearman 0.416
+
+σ recalibration on S669:  ESM2 T = 2.76    SaProt T = 2.10
+SaProt recal: ICE 0.27 → 0.05   cov@0.90 0.52 → 0.94   NLL 3.08 → 2.27
+```
+
+### Three findings
+
+**1. The hypothesis was directionally right.** SaProt drops S669 RMSE from 2.83 to 2.53 (−10%) and NLL from 4.64 to 3.19 (−31%). Structure-aware encoding *does* recover μ-accuracy on the new label distribution. This validates §11's argument that the encoder, not the head, is the bottleneck for cross-dataset μ generalisation.
+
+**2. The cost lands on T2837 in-distribution performance.** SaProt T2837 RMSE is +0.10 worse and Spearman drops from 0.348 → 0.218 (-37%). The σ-ranking property — the strongest finding of the entire campaign — partially breaks under the encoder swap. The combined `<aa><3di>` token space changes what the σ branch can attend to, and the input-side regularities ESM2 had learned about "which mutations are uncertain" do not survive intact.
+
+**3. The strict-improvement criterion is not met.** From the notebook's decision rule: T2837 RMSE > 1.50 *and* Spearman < 0.348 trigger the "encoder swap broke in-distribution performance" row. SaProt is **not** a drop-in production replacement for ESM2-650M.
+
+### S669 σ recalibration (SaProt edition)
+
+The recalibration recipe from §11 still works: a closed-form temperature scalar fitted on 308 S669 rows brings ICE from 0.27 to 0.05 and cov@0.90 from 0.52 to 0.94. SaProt's fitted T = 2.10 is smaller than ESM2's 2.76, consistent with SaProt's σ being less under-scaled to start with (SaProt RMSE 2.53 < ESM2 RMSE 2.83).
+
+| Method | RMSE | NLL | ICE | cov@0.90 | cov@0.95 | Spearman |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline σ              | 2.46 | 3.08 | 0.271 | 0.518 | 0.632 | 0.440 |
+| **temperature scaling** | 2.46 | 2.27 | **0.047** | **0.938** | 0.990 | 0.440 |
+| **isotonic regression** | 2.46 | **2.25** | 0.057 | 0.948 | 0.977 | 0.462 |
+
+### Caveats
+
+1. **Different test populations.** The SaProt T2837 cache lost 8 proteins (439 mutations) because their `uniprot_id` was retired in UniProt and the AF API returned 404. The remaining T2837 test set is n=137 instead of the §11 n=170; 33 of the missing test rows happen to fall in those 8 proteins. ESM2 has not been re-evaluated on the same 137-row subset, so part of the SaProt T2837 RMSE inflation may be sample-shift rather than genuine encoder regression. A clean comparison needs ESM2 evaluated on the SaProt-aligned subset (deferred — should be a 30-line follow-up).
+2. **Single seed of seeds.** Both ESM2 and SaProt were 5-member ensembles; the standard error on Spearman at n≈137 is ~0.07. The SaProt T2837 Spearman of 0.218 vs ESM2's 0.348 is roughly two standard errors — meaningful but not overwhelming.
+3. **3Di tokenisation is from AlphaFold-DB structures**, the same source the production D6 ablation already used for DSSP/pLDDT features. The signal SaProt encodes is therefore *not* orthogonal to D6 — some of the structural information is already in the D5 ensemble's σ-branch features. A cleaner test of "does the encoder need to know structure" would compare SaProt against an ESM2 baseline that has no structural bio features (D0).
+
+### What this means for the production model
+
+D5 ensemble + post-hoc σ recalibration (the §11 recipe) remains the production model. SaProt is documented as a **partial-positive finding**: the cross-dataset μ improvement is real, but the in-distribution σ-ranking degradation is also real, and the trade-off is not favourable for deployment under the original strict-improvement criterion.
+
+### Recommended next experiments
+
+1. **Apples-to-apples comparison.** Re-evaluate ESM2 on the SaProt-aligned 137-row T2837 test subset to disentangle "different test population" from "encoder regression". Cheap; should land in a follow-up PR.
+2. **Try a structure-aware encoder that preserves pure AA tokens.** ESM-IF (Hsu et al. 2022) takes a PDB and produces per-residue embeddings via a GVP-Transformer architecture *without* mixing AA and 3Di in the input vocabulary. If σ-ranking on T2837 is preserved while μ on S669 improves, that would be the strict win.
+3. **Investigate the σ-branch token-sensitivity.** The ~37% Spearman drop suggests the σ branch's signal is sensitive to the *input vocabulary*, not just the output embedding. Measure σ-branch attention over the 400-token SaProt vocabulary and see which token classes carry uncertainty signal — this might directly point to a feature-engineering fix that recovers ESM2-level σ-ranking on top of SaProt's μ-improvement.
 
 ## 13. Pull-request trail
 
@@ -389,7 +443,10 @@ decision sequence and serve as a citable trail:
 * `#18` — S669 external validation: format converter + eval script (scripts 17 + 18)
 * `#20` — Colab notebook for S669 (Zenodo source + FASTA extractor + T2837-stat standardiser)
 * `#21` — `REPORT.md` §11 + `scripts/19` post-hoc σ recalibration
-* this PR — SaProt structure-aware backbone scaffolding (`scripts/20` + Colab notebook + REPORT §12)
+* `#22` — SaProt structure-aware backbone scaffolding (`scripts/20` + Colab notebook)
+* `#23` — Fix AF PDB path resolution in SaProt notebook
+* `#24` — Script 20: re-resolve `mut_idx` against PDB-AA so SaProt samples the right residue
+* this PR — SaProt live results in `REPORT.md` §12 + deliverable table
 
 ---
 
@@ -414,3 +471,10 @@ decision sequence and serve as a citable trail:
 > 1.50 → 2.83), pointing to the encoder rather than σ-branch design as
 > the next lever — ESM2-650M was held fixed throughout and a
 > structure-aware backbone is the recommended next experiment.
+> **§12 ran that experiment**: SaProt (a structure-augmented PLM) drops
+> S669 RMSE 2.83 → 2.53 and NLL 4.64 → 3.19 — confirming the encoder
+> hypothesis — but at the cost of T2837 σ-ranking (Spearman 0.348 →
+> 0.218). The trade-off is not strictly favourable, so D5 + σ
+> recalibration remains the production model. The next experiment is
+> ESM-IF (structure-aware but pure-AA-token), which may close the
+> in-distribution σ-ranking gap.
