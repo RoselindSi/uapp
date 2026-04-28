@@ -76,13 +76,14 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # ─────────────────────────────────────────────────────────────────────────────
 # Bio-feature slicing — must match scripts/07_experiment_d_real.py
 # ─────────────────────────────────────────────────────────────────────────────
-RSA_IDX = 0
-BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
-EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
+RSA_IDX  = 0
+BIO_IDX  = list(range(1, 7))     # chemistry
+EXT_IDX  = list(range(7, 13))    # sequence-derived structural
+DSSP_IDX = list(range(13, 21))   # DSSP + pLDDT (from scripts/14)
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
-    """Slice columns of the bio-feature tensor for one of D0..D5.  See script 07."""
+    """Slice columns of the bio-feature tensor for one of D0..D6.  See script 07."""
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -101,6 +102,14 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         if ablation == "D4":
             return feats[:, EXT_IDX]
         return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
+    if ablation == "D6":
+        if feats.shape[-1] < 21:
+            raise ValueError(
+                f"ablation 'D6' requires DSSP+pLDDT bio features (k=21); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/14_compute_structural_features.py."
+            )
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX + DSSP_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -312,8 +321,8 @@ def main() -> None:
                    help="Default: auto-discover next to --embeddings")
     p.add_argument("--out",         required=True, type=Path)
     p.add_argument("--ablations",   nargs="+", default=["D0", "D1", "D2", "D3"],
-                   choices=["D0", "D1", "D2", "D3", "D4", "D5"],
-                   help="D4/D5 require an --include-extended bio-feats file.")
+                   choices=["D0", "D1", "D2", "D3", "D4", "D5", "D6"],
+                   help="D4/D5 require --include-extended; D6 requires scripts/14 output.")
     p.add_argument("--folds",       type=int, default=5)
     p.add_argument("--seeds",       type=int, nargs="+", default=[0, 1, 2])
     p.add_argument("--fold-seed",   type=int, default=42,
@@ -469,11 +478,20 @@ def main() -> None:
     log.info("Saved %s", out_dir / "aggregate.csv")
 
     # ── Paired stats: D1/D2/D3 vs D0 over per-(fold,seed) Spearman/ICE/NLL ──
+    # Compute paired tests for every ordered pair of ablations (challenger,
+    # baseline) where the order in --ablations defines the direction:
+    # later → challenger, earlier → baseline.  This means passing
+    # ``--ablations D0 D3 D5`` produces D3_vs_D0, D5_vs_D0, and D5_vs_D3.
+    pairs = [
+        (args.ablations[i], args.ablations[j])
+        for i in range(len(args.ablations))
+        for j in range(i + 1, len(args.ablations))
+    ]
     sig = {}
     for metric in ["spearman", "ice", "nll", "top0.20", "rmse"]:
         sig[metric] = {
-            f"{c}_vs_D0": paired_test(per, "D0", c, metric)
-            for c in ["D1", "D2", "D3"] if c in args.ablations
+            f"{chal}_vs_{base}": paired_test(per, base, chal, metric)
+            for (base, chal) in pairs
         }
     (out_dir / "significance.json").write_text(json.dumps(sig, indent=2))
     log.info("Saved %s", out_dir / "significance.json")
@@ -499,23 +517,23 @@ def main() -> None:
             print(f"{r['ablation']:<6} {int(r['seed']):>4} {r['rmse']:9.4f} "
                   f"{r['nll']:9.4f} {r['ice']:9.4f} {r['spearman']:10.4f} {r['top0.20']:9.4f}")
 
-    print("\nPaired tests on Spearman  (challenger − D0, paired by (fold,seed)):\n")
-    print(f"{'comparison':<14} {'mean Δ':>10} {'p (t-test)':>12} {'p (Wilcoxon)':>14} {'wins':>10}")
+    print("\nPaired tests on Spearman  (challenger − baseline, paired by (fold,seed)):\n")
+    print(f"{'comparison':<16} {'mean Δ':>10} {'p (t-test)':>12} {'p (Wilcoxon)':>14} {'wins':>10}")
     for k_, v in sig["spearman"].items():
         if "skipped" in v:
-            print(f"{k_:<14} {v['skipped']}"); continue
+            print(f"{k_:<16} {v['skipped']}"); continue
         wins = f"{v['wins_for_challenger']}/{v['n']}"
         star = " *" if v["t_p_two_sided"] < 0.05 else ""
-        print(f"{k_:<14} {v['mean_diff']:+10.4f} {v['t_p_two_sided']:12.4f} "
+        print(f"{k_:<16} {v['mean_diff']:+10.4f} {v['t_p_two_sided']:12.4f} "
               f"{v['wilcoxon_p_two_sided']:14.4f} {wins:>10}{star}")
 
     print("\nDecision (Spearman, α = 0.05):")
-    for c in ["D1", "D2", "D3"]:
-        v = sig["spearman"].get(f"{c}_vs_D0")
-        if v is None or "skipped" in v: continue
-        verdict = ("BEATS D0" if v["t_p_two_sided"] < 0.05 and v["mean_diff"] > 0
+    for k_, v in sig["spearman"].items():
+        if "skipped" in v: continue
+        # k_ is 'CHAL_vs_BASE'; verdict is "CHAL beats BASE" if positive + significant
+        verdict = ("BEATS baseline" if v["t_p_two_sided"] < 0.05 and v["mean_diff"] > 0
                    else "no significant difference")
-        print(f"  {c}: {verdict}  (Δ={v['mean_diff']:+.4f}, p={v['t_p_two_sided']:.3f})")
+        print(f"  {k_}: {verdict}  (Δ={v['mean_diff']:+.4f}, p={v['t_p_two_sided']:.3f})")
     print("=" * 92)
 
 

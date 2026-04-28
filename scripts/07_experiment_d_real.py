@@ -72,9 +72,10 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # Bio-feature loading + ablation slicing
 # ─────────────────────────────────────────────────────────────────────────────
 # Indices in the standardised feature vector produced by mutation_features.
-RSA_IDX = 0
-BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
-EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
+RSA_IDX  = 0
+BIO_IDX  = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
+EXT_IDX  = list(range(7, 13))    # sequence-derived: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
+DSSP_IDX = list(range(13, 21))   # DSSP+pLDDT: ss_helix, ss_sheet, rsa_dssp, phi, psi, plddt, local_helix, local_sheet
 
 
 def load_bio_feats(path: Path) -> tuple[dict, dict]:
@@ -85,14 +86,15 @@ def load_bio_feats(path: Path) -> tuple[dict, dict]:
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
-    """Slice columns of the bio-feature tensor for one of D0..D5.
+    """Slice columns of the bio-feature tensor for one of D0..D6.
 
     D0  no extras (baseline)
     D1  RSA only
     D2  chemistry only            (BLOSUM/Grantham/Δcharge/Δpolarity/Δhydro/Δvolume)
     D3  RSA + chemistry           (k=7, original Track-D winner)
-    D4  structural-only           (k=6,  requires --include-extended bio file)
-    D5  RSA + chemistry + struct  (k=13, requires --include-extended bio file)
+    D4  sequence-struct only      (k=6,  requires --include-extended bio file)
+    D5  RSA + chemistry + seq-struct (k=13, requires --include-extended)
+    D6  D5 + DSSP/pLDDT           (k=21, requires scripts/14 output)
     """
     if ablation == "D0":
         return None
@@ -112,6 +114,14 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         if ablation == "D4":
             return feats[:, EXT_IDX]
         return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
+    if ablation == "D6":
+        if feats.shape[-1] < 21:
+            raise ValueError(
+                f"ablation 'D6' requires DSSP+pLDDT bio features (k=21); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/14_compute_structural_features.py to produce one."
+            )
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX + DSSP_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -299,8 +309,9 @@ def main() -> None:
                    help="auto | cpu | cuda | mps   (default: auto)")
     p.add_argument("--log-level",  type=str,   default="INFO")
     p.add_argument("--ablations",  nargs="+",  default=["D0", "D1", "D2", "D3"],
-                   choices=["D0", "D1", "D2", "D3", "D4", "D5"],
-                   help="Ablations to run.  D4/D5 require an --include-extended bio-feats file.")
+                   choices=["D0", "D1", "D2", "D3", "D4", "D5", "D6"],
+                   help="D4/D5 require --include-extended bio file; "
+                        "D6 requires the DSSP+pLDDT bio file from scripts/14.")
     args = p.parse_args()
 
     log = setup_logging(args.log_level)
