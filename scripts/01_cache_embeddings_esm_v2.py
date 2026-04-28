@@ -200,6 +200,11 @@ def main():
     parser.add_argument("--esm-model", type=str, default=DEFAULT_ESM_MODEL,
                         help="HuggingFace ESM-2 model id (default: 8M).  "
                              "Use facebook/esm2_t33_650M_UR50D for the 650M backbone.")
+    parser.add_argument("--metadata-out", type=Path, default=None,
+                        help="Where to write the processed metadata CSV (with the "
+                             "fold splits used to build this cache).  Defaults to "
+                             "<out_stem>_metadata.csv next to --out, so different "
+                             "datasets don't overwrite each other's metadata.")
     args = parser.parse_args()
 
     log = setup_logging()
@@ -313,7 +318,10 @@ def main():
     log.info("done. %s (%.1f MB)", args.out, args.out.stat().st_size / 1e6)
 
     # Also save the metadata DataFrame for the notebook's interpretability analysis
-    meta_csv_path = args.out.parent / "t2837_metadata.csv"
+    if args.metadata_out is not None:
+        meta_csv_path = args.metadata_out
+    else:
+        meta_csv_path = args.out.parent / f"{args.out.stem}_metadata.csv"
     df.to_csv(meta_csv_path, index=False)
     log.info("saved mutation metadata to %s", meta_csv_path)
 
