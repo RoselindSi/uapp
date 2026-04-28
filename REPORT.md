@@ -283,8 +283,10 @@ Output of step 4 contains the statistical-significance JSON in `significance.jso
 | `scripts/18_evaluate_on_s669.py` | Train D5/D6 ensemble on full T2837, predict on S669, report metrics |
 | `scripts/19_recalibrate_sigma_s669.py` | Post-hoc σ recalibration on S669 — temperature scaling + isotonic regression on a held-out cal split |
 | `scripts/20_cache_embeddings_saprot.py` | SaProt embeddings (combined AA + 3Di tokens via FoldSeek) — drop-in encoder swap for §12 |
+| `scripts/21_align_cache_to_reference.py` | Filter source cache+bio to a reference cache's row subset (apples-to-apples §12 follow-up) |
+| `scripts/22_cache_embeddings_esmif.py` | ESM-IF1 embeddings (structure-aware, pure-AA tokens via GVP-Transformer) — §12 follow-up |
 | `notebooks/colab_s669_evaluation.ipynb` | End-to-end Colab walkthrough that ran the §11 evaluation |
-| `notebooks/colab_saprot_evaluation.ipynb` | End-to-end Colab walkthrough for §12 (SaProt on T2837 + S669) |
+| `notebooks/colab_saprot_evaluation.ipynb` | End-to-end Colab walkthrough for §12: SaProt + the two follow-ups (aligned ESM2, ESM-IF) |
 | `notebooks/next_steps_comprehensive.ipynb`  | NEXT_STEPS Tracks A–D walkthrough on synthetic data |
 | `notebooks/colab_lora_finetune_d3.ipynb`    | Colab T4 notebook for LoRA fine-tune |
 
@@ -421,11 +423,24 @@ The recalibration recipe from §11 still works: a closed-form temperature scalar
 
 D5 ensemble + post-hoc σ recalibration (the §11 recipe) remains the production model. SaProt is documented as a **partial-positive finding**: the cross-dataset μ improvement is real, but the in-distribution σ-ranking degradation is also real, and the trade-off is not favourable for deployment under the original strict-improvement criterion.
 
-### Recommended next experiments
+### Follow-up experiments (now scaffolded)
 
-1. **Apples-to-apples comparison.** Re-evaluate ESM2 on the SaProt-aligned 137-row T2837 test subset to disentangle "different test population" from "encoder regression". Cheap; should land in a follow-up PR.
-2. **Try a structure-aware encoder that preserves pure AA tokens.** ESM-IF (Hsu et al. 2022) takes a PDB and produces per-residue embeddings via a GVP-Transformer architecture *without* mixing AA and 3Di in the input vocabulary. If σ-ranking on T2837 is preserved while μ on S669 improves, that would be the strict win.
-3. **Investigate the σ-branch token-sensitivity.** The ~37% Spearman drop suggests the σ branch's signal is sensitive to the *input vocabulary*, not just the output embedding. Measure σ-branch attention over the 400-token SaProt vocabulary and see which token classes carry uncertainty signal — this might directly point to a feature-engineering fix that recovers ESM2-level σ-ranking on top of SaProt's μ-improvement.
+Two follow-ups ship in the same PR as this section to remove the n=137 confound and test the token-vocabulary hypothesis:
+
+1. **Apples-to-apples comparison** — `scripts/21_align_cache_to_reference.py` filters the ESM2 cache + bio features to the SaProt-aligned 137-row T2837 subset. The notebook then re-runs script 18 with the aligned ESM2 caches so both encoders predict on the *same* test rows. Numbers go into the deliverable table once the Colab run completes.
+
+2. **ESM-IF1 (structure-aware, pure-AA tokens)** — `scripts/22_cache_embeddings_esmif.py` builds the same mutation-aware feature shape using `esm.pretrained.esm_if1_gvp4_t16_142M_UR50` from the `fair-esm` package. ESM-IF1 takes structure through GVP geometric features instead of injecting 3Di into the token vocabulary, so the σ-branch input alphabet stays pure-AA. If σ-ranking on T2837 survives the encoder swap *and* μ on S669 still improves vs the aligned-ESM2 baseline, that is the strict-improvement encoder we were looking for. Embedding dim is 512 (vs 1280 for ESM2/SaProt) → mutation-aware feature is 1064-d; FeatureAugmentedHead reads `d_in` dynamically so scripts 06/18/19 work unchanged.
+
+3. **σ-branch token-sensitivity diagnostic.** Outside the scope of this PR, but the experiments above will tell us whether the SaProt Spearman drop is an encoder-class property or specific to the AA+3Di token-mixing. If ESM-IF preserves Spearman, the mixing hypothesis is supported.
+
+### Decision matrix for the follow-ups
+
+| ESM-IF T2837 Spearman | ESM-IF S669 RMSE | Verdict |
+|---|---|---|
+| ≥ 0.33 (vs aligned-ESM2 baseline) | < aligned-ESM2 by ≥ 0.10 | **Strict win.** Structure-aware *without* token mixing is the production encoder. |
+| ≥ 0.33 | ≈ aligned-ESM2 | σ-ranking preserved but no μ gain — structure-awareness alone isn't enough; SaProt's S669 win came from somewhere else (e.g. the 3Di tokens themselves carrying ddG signal). |
+| < 0.30 | irrelevant | The σ-ranking degradation is encoder-class, not token-class. Both SaProt and ESM-IF break it; sequence-only encoders are the only ones that preserve it. Keep ESM2-650M in production. |
+| < 0.30 | < aligned-ESM2 | Same μ-vs-σ trade-off as SaProt. Confirms structure-aware = better μ at the cost of σ-ranking, regardless of how structure enters.
 
 ## 13. Pull-request trail
 
@@ -446,7 +461,7 @@ decision sequence and serve as a citable trail:
 * `#22` — SaProt structure-aware backbone scaffolding (`scripts/20` + Colab notebook)
 * `#23` — Fix AF PDB path resolution in SaProt notebook
 * `#24` — Script 20: re-resolve `mut_idx` against PDB-AA so SaProt samples the right residue
-* this PR — SaProt live results in `REPORT.md` §12 + deliverable table
+* this PR — SaProt live results in `REPORT.md` §12 + deliverable table; `scripts/21` (apples-to-apples cache subset filter) + `scripts/22` (ESM-IF encoder); notebook sections 10 and 11 to run both follow-ups
 
 ---
 
