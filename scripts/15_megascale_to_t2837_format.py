@@ -128,6 +128,11 @@ def main() -> None:
     p.add_argument("--seed",          type=int,   default=42)
     p.add_argument("--ddg-col",       type=str,   default=None,
                    help="Override ΔG column name (default: try common ones)")
+    p.add_argument("--seq-col",       type=str,   default=None,
+                   help="Override sequence column.  Default: auto-detect — prefer "
+                        "aa_seq_full (Tsuboyama position numbering) over aa_seq.  "
+                        "If both fail to align with mut_type positions, the script "
+                        "tries the other automatically before giving up.")
     p.add_argument("--max-rows",      type=int,   default=None,
                    help="Optional cap on output rows for quick smoke runs")
     p.add_argument("--log-level",     type=str,   default="INFO")
@@ -140,8 +145,14 @@ def main() -> None:
     log.info("Read %d raw rows; columns: %s", len(df), list(df.columns))
 
     # ── Resolve column names ─────────────────────────────────────────────────
-    name_col   = _pick(df, "name", "protein_name", "domain", "WT_name")
-    seq_col    = _pick(df, "aa_seq", "sequence", "wt_seq", "wt_aa_seq")
+    # In Tsuboyama 2023 the per-row `aa_seq` / `aa_seq_full` already has the
+    # mutation applied — they aren't WT sequences.  The right way to validate
+    # mut_type positions is to look up the WT sequence per protein from rows
+    # where mut_type == "wt", keyed by `WT_name` (or `name` as fallback).
+    name_col   = _pick(df, "WT_name", "name", "protein_name", "domain")
+    seq_col    = (args.seq_col or
+                  _pick(df, "aa_seq", "aa_seq_full", "sequence",
+                        "wt_seq", "wt_aa_seq"))
     mut_col    = _pick(df, "mut_type", "mutation", "variant", "mutation_type")
     ddg_col    = args.ddg_col or _pick(
         df, "ddG_ML", "ddG", "ddg_ml", "ddg",
@@ -153,10 +164,49 @@ def main() -> None:
         if c is None:
             raise SystemExit(
                 f"Could not find a {n!r} column.  Available columns: {list(df.columns)}.\n"
-                "Pass --ddg-col explicitly, or rename your CSV columns."
+                "Pass --ddg-col / --seq-col explicitly, or rename your CSV columns."
             )
     log.info("Resolved columns: name=%s, seq=%s, mut=%s, ddg/dg=%s",
              name_col, seq_col, mut_col, ddg_col)
+
+    # ── Build per-protein WT sequence lookup from rows where mut_type == 'wt'.
+    #    The dataset stores PER-VARIANT sequences (already mutated) in the seq
+    #    column, so we cannot validate positions against the row's own seq.
+    #    Instead: for each WT row, register name → seq, then validate SAV
+    #    positions against the registered WT seq.
+    wt_mask = df[mut_col].astype(str).str.lower().isin(
+        ("wt", "wildtype", "wild-type", "ref")
+    )
+    log.info("Building per-protein WT sequence lookup from %d wt rows ...",
+             int(wt_mask.sum()))
+    wt_seq_lookup: dict[str, str] = {}
+    for _, r in df[wt_mask].iterrows():
+        nm = str(r[name_col]); s = str(r[seq_col]).strip().upper()
+        # Pick the longest seq if multiple wt rows per protein
+        if nm not in wt_seq_lookup or len(s) > len(wt_seq_lookup[nm]):
+            wt_seq_lookup[nm] = s
+    log.info("WT-sequence lookup: %d proteins.  (df has %d unique %s values)",
+             len(wt_seq_lookup), df[name_col].nunique(), name_col)
+
+    # ── Sanity-check: how many SAVs align with their protein's WT seq? ──────
+    sample = df.sample(n=min(2000, len(df)), random_state=0)
+    ok = tried = 0
+    for _, r in sample.iterrows():
+        parsed = parse_mut_type(r[mut_col])
+        if parsed is None: continue
+        wt_aa, pos, _ = parsed
+        nm = str(r[name_col])
+        wt_seq = wt_seq_lookup.get(nm)
+        if wt_seq is None: tried += 1; continue
+        if 1 <= pos <= len(wt_seq) and wt_seq[pos - 1] == wt_aa:
+            ok += 1
+        tried += 1
+    rate = ok / max(tried, 1)
+    log.info("WT-seq alignment sanity-check: %.1f%% of sampled SAVs match",
+             100 * rate)
+    if rate < 0.30:
+        log.warning("Alignment rate is low.  The chosen `seq` column may not "
+                    "store the canonical WT sequence — try --seq-col aa_seq_full.")
 
     # ── Compute ΔΔG (pair each mutant with its wt) if we got a ΔG column ────
     is_ddg = ddg_col.lower().startswith("ddg")
@@ -176,13 +226,19 @@ def main() -> None:
     n_skipped_not_sav = 0
     n_skipped_seq_mismatch = 0
     n_skipped_no_wt_dG = 0
+    n_skipped_no_wt_seq = 0
     for _, row in df.iterrows():
         parsed = parse_mut_type(row[mut_col])
         if parsed is None:
             n_skipped_not_sav += 1; continue
         wt_aa, pos, mut_aa = parsed
 
-        seq = str(row[seq_col]).strip().upper()
+        # Look up WT sequence by protein name (NOT the row's own seq column —
+        # those are already mutated in Tsuboyama 2023).
+        nm = str(row[name_col])
+        seq = wt_seq_lookup.get(nm)
+        if seq is None:
+            n_skipped_no_wt_seq += 1; continue
         if pos < 1 or pos > len(seq) or seq[pos - 1] != wt_aa:
             n_skipped_seq_mismatch += 1; continue
 
@@ -211,8 +267,12 @@ def main() -> None:
             "dataset":   "megascale",
         })
 
-    log.info("Kept %d SAV rows.  Skipped: %d not-SAV, %d seq-mismatch, %d missing wt ΔG",
-             len(out_rows), n_skipped_not_sav, n_skipped_seq_mismatch, n_skipped_no_wt_dG)
+    log.info(
+        "Kept %d SAV rows.  Skipped: %d not-SAV, %d no-wt-seq-for-protein, "
+        "%d seq-mismatch (pos out of range or wt_aa wrong), %d missing wt ΔG",
+        len(out_rows), n_skipped_not_sav, n_skipped_no_wt_seq,
+        n_skipped_seq_mismatch, n_skipped_no_wt_dG,
+    )
 
     if not out_rows:
         raise SystemExit("No usable rows after parsing.  Check --megascale-csv format.")
