@@ -369,14 +369,29 @@ def main() -> None:
         log.warning("dropping %d rows whose protein has no 3Di", n_drop)
     df = df[keep].copy().reset_index(drop=True)
 
-    # 6. Sanity-check: PDB-derived AA must match the metadata's per-row sequence
-    #    at the mutation site.  If not, the residue indices won't line up.
-    n_pdb_seq_mismatch = 0
+    # 6. Re-resolve mut_idx against the PDB-derived AA string.  The metadata's
+    #    `mut_idx` was found against the metadata's per-row `sequence` string,
+    #    but the PDB-derived AA from FoldSeek may have different numbering
+    #    (signal peptides cleaved, chain offsets, missing termini).  Sampling
+    #    SaProt embeddings at the metadata index would land at the wrong
+    #    residue for any protein where those two sequences disagree.
+    log.info("re-resolving mut_idx against PDB-derived AA strings...")
+    new_idx, n_aligned, n_unaligned = [], 0, 0
     for _, row in df.iterrows():
         pdb_aa, _ = aa3di_cache[str(row["pdb_code"])]
-        idx = int(row["mut_idx"])
-        if idx >= len(pdb_aa) or pdb_aa[idx] != AA3to1.get(row["wtAA"], "?"):
-            n_pdb_seq_mismatch += 1
+        idx = find_mutation_index(pdb_aa, int(row["position"]), row["wtAA"])
+        if idx is None:
+            new_idx.append(None); n_unaligned += 1
+        else:
+            new_idx.append(idx); n_aligned += 1
+    df["mut_idx_pdb"] = new_idx
+    log.info("PDB-AA alignment: %d ok, %d unalignable (will be dropped)",
+             n_aligned, n_unaligned)
+    if n_unaligned:
+        df = df[df["mut_idx_pdb"].notna()].copy().reset_index(drop=True)
+    df["mut_idx"] = df["mut_idx_pdb"].astype(int)
+    df.drop(columns=["mut_idx_pdb"], inplace=True)
+    n_pdb_seq_mismatch = 0  # always 0 by construction now
     if n_pdb_seq_mismatch:
         log.warning(
             "%d rows have a wtAA / PDB-AA mismatch at mut_idx — these will use "
