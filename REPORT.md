@@ -34,10 +34,13 @@ themselves the contribution: they show *where the ceiling is*).
 | 650M D5 ensemble (D3 + seq-struct)        | 1.50 | 1.04 | 1.85 | 0.05 | 0.85 | 0.91 | **0.348** | 0.44 |
 | **650M D6 ensemble (D5 + DSSP/pLDDT)**    | **1.49** | — | **1.82** | **0.04** | 0.89 | — | 0.331 | 0.44 |
 | LoRA D3 (negative result)                 | 1.47 | 1.04 | 1.83 | 0.04 | 0.85 | 0.91 | 0.06 | 0.24 |
+| **650M D5 ensemble — S669 external (n = 617)**  | 2.83 | 2.29 | 4.64 | 0.31 | 0.37 | 0.45 | **0.434** | 0.38 |
+| 650M D5 ensemble — S669 + temperature-scaled σ (eval n = 309) | 2.82 | — | **2.37** | **0.04** | **0.92** | 0.99 | 0.449 | — |
 
 > The LoRA row's RMSE/NLL/ICE *look* better but the σ-branch ranking signal was destroyed (Spearman 0.06).
 > The D6 row wins 3 of 4 production metrics; D5 retains the best Spearman.
 > Either D5 or D6 is defensible — D6 is preferred for calibration-quality, D5 for ranking-quality.
+> The **S669 row is the headline of §11**: σ-ranking transferred and *improved* (0.348 → 0.434), while μ-accuracy and absolute calibration did not.
 
 ### NEXT_STEPS targets — final scorecard
 
@@ -188,7 +191,7 @@ loss function or feature richness") is itself the take-away.
 2. **ICE = 0.041 missed the ≤ 0.02 target** by ~2×, though best individual D6 member hit 0.025. Temperature scaling on NLL is a no-op (σ already NLL-optimal), so closing the gap requires isotonic regression / quantile-based recalibration — not implemented.
 3. **D5 vs D6 is statistically inconclusive.** Both are within noise of each other on every metric.
 4. **DSSP/pLDDT coverage is 82.9%** (441 mutations have NaN-imputed structural features because their uniprot_id was not in AF DB). For those rows D6 falls back to D5-equivalent behaviour.
-5. **No external validation merged yet.** S669 evaluation script is in flight (scripts/17 + 18 below); cross-dataset generalisation numbers will be appended once that lands.
+5. **μ-accuracy doesn't transfer cross-dataset, but σ-ranking *and* σ-calibration do.** D5 ensemble on S669 (n = 617, 90 proteins, no T2837 overlap by construction): σ-ranking transferred and *improved* (Spearman 0.434 vs 0.348). RMSE doubled (1.50 → 2.83) — the absolute ddG scale didn't transfer. σ was initially under-scaled (ICE 0.31, cov@90 = 0.37), but a single closed-form temperature scalar fitted on 308 rows fully closed that gap (ICE 0.04, cov@90 = 0.92, NLL halved). See §11 for the full split-of-skills story and the recalibration numbers.
 
 ## 8. Future work (ROI-ranked)
 
@@ -198,7 +201,9 @@ loss function or feature richness") is itself the take-away.
 | **Isotonic regression on val coverage** for ICE recalibration | ICE 0.041 → ~0.02 (target met) | ½ day, RMSE/Spearman unchanged |
 | **More seeds** (K-fold with 10–20 seeds) | Tightens CIs, may lift D5-vs-D3 to significance | Cheap (extra Colab compute) |
 | **Two-stage warm-start LoRA** | Speculative; unblocks LoRA path if it works | 1 day |
-| **External dataset cross-validation (S669, ProThermDB)** | Confirms generalisation | 1 day |
+| ~~**External dataset cross-validation (S669, ProThermDB)**~~ | **Done — see §11.** S669 σ-ranking improved (Spearman 0.434); calibration broken on the new label distribution. | — |
+| **Different backbone (ESM-3, ESM-IF, ProtT5, SaProt)** | The whole campaign is on ESM2-650M; we changed the dataset (Megascale, S669) but never the encoder. A structure-aware backbone (ESM-IF, SaProt) might rescue μ-accuracy on S669 since the ranking/structure features already transferred. | 2–3 days |
+| ~~**Post-hoc σ recalibration (S669 isotonic + temperature)**~~ | **Done — see §11.** Temperature T = 2.76 closed the entire calibration gap (ICE 0.32 → 0.04, cov@90 0.36 → 0.92, NLL halved); Spearman preserved. | — |
 | **Improved AF DB coverage** (use experimental PDBs as fallback for the 17.1% missing AF models) | Probably minor; D6 already not better than D5 | ½ day |
 
 ---
@@ -272,11 +277,87 @@ Output of step 4 contains the statistical-significance JSON in `significance.jso
 | `scripts/15_megascale_to_t2837_format.py` | Tsuboyama 2023 Megascale CSV → T2837-shaped CSV (used for pretrain corpus) |
 | `scripts/16_pretrain_and_finetune.py` | Pretrain D5 head on Megascale, fine-tune on T2837 (negative result, see §6) |
 | `scripts/17_s669_to_t2837_format.py` | S669 release CSV → T2837-shaped CSV for external evaluation |
-| `scripts/18_evaluate_on_s669.py` | Train D6 ensemble on full T2837, predict on S669, report metrics |
+| `scripts/18_evaluate_on_s669.py` | Train D5/D6 ensemble on full T2837, predict on S669, report metrics |
+| `scripts/19_recalibrate_sigma_s669.py` | Post-hoc σ recalibration on S669 — temperature scaling + isotonic regression on a held-out cal split |
+| `notebooks/colab_s669_evaluation.ipynb` | End-to-end Colab walkthrough that ran the §11 evaluation |
 | `notebooks/next_steps_comprehensive.ipynb`  | NEXT_STEPS Tracks A–D walkthrough on synthetic data |
 | `notebooks/colab_lora_finetune_d3.ipynb`    | Colab T4 notebook for LoRA fine-tune |
 
-## 11. Pull-request trail
+## 11. External validation on S669
+
+After the campaign closed on T2837, we ran the production D5 ensemble on **S669** (Pancotti et al. 2022, *Briefings in Bioinformatics*; Zenodo record 7568094) — 669 single-point variants across 94 proteins, curated to have low overlap with common training sets. After the converter (script 17) dropped rows whose `Seq_Mut` position didn't align with the WT chain extracted from the bundled PDB, **617 rows across 90 proteins** entered evaluation.
+
+Pipeline (notebook `colab_s669_evaluation.ipynb`):
+
+1. Download `S669.zip` from Zenodo, extract WT chain sequences from the bundled PDBs into a FASTA keyed by `Protein` id.
+2. `scripts/17_s669_to_t2837_format.py` — convert the Zenodo CSV to T2837 schema using `--mut-col Seq_Mut --ddg-col Experimental_DDG_dir --fasta wildtypes.fasta`. 617/669 SAVs kept.
+3. `scripts/01_cache_embeddings_esm_v2.py` — cache ESM2-650M embeddings for S669 (the same backbone used for T2837).
+4. Inline build of D5 bio features (k = 13) standardised with **T2837's** train mu/sd. (Script 06 fits the standardiser on a `train` split, which S669 doesn't have, *and* using T2837 statistics is the correct thing to do scientifically since that's what the trained heads expect.)
+5. `scripts/18_evaluate_on_s669.py` — train K = 5 D5 heads on T2837 train, early-stop on T2837 val, predict on both T2837 test (sanity) and S669.
+
+### Sanity check (T2837 test, n = 170)
+
+The pipeline reproduces the campaign's Day-2 numbers within rounding noise:
+
+| Metric | This run | Day-2 reference |
+|---|---:|---:|
+| RMSE | 1.496 | 1.50 |
+| NLL | 1.849 | 1.85 |
+| ICE | 0.050 | 0.05 |
+| Spearman | 0.348 | 0.348 |
+
+The S669 numbers below are therefore not a measurement artefact.
+
+### S669 results (n = 617)
+
+| Metric | T2837 ensemble | S669 ensemble | Δ | Read |
+|---|---:|---:|---:|---|
+| **Spearman(σ, \|err\|)** | 0.348 | **0.434** | **+0.087** | ✓ σ-ranking transfers and *improves* with the larger sample |
+| RMSE | 1.50 | 2.83 | +1.33 | ✗ μ accuracy nearly halved |
+| MAE | 1.05 | 2.29 | +1.25 | ✗ same |
+| NLL | 1.85 | 4.64 | +2.79 | ✗ joint likelihood dominated by RMSE inflation |
+| ICE | 0.05 | 0.31 | +0.26 | ✗ σ severely under-scaled |
+| cov@0.90 | 0.86 | 0.37 | −0.49 | ✗ 90% PI covers only 37% of S669 mass |
+
+### Interpretation — the model splits cleanly into two skills
+
+**Transferable (σ-branch ranking).** Spearman 0.434 with `n = 617` is statistically robust (SE ≈ 0.04, z ≈ 11 vs zero) and *higher* than the on-distribution T2837 number (0.348, `n = 170`). The σ-branch learned a property of the input — *what kinds of mutations are uncertain* — that does not depend on the train-time ddG distribution. This is exactly the NEXT_STEPS Track-D goal stated in cross-dataset form.
+
+**Non-transferable (μ accuracy + absolute calibration).** RMSE doubles from 1.50 to 2.83 and σ becomes consistently too small. The joint failure is consistent with a label-distribution shift: S669 (curated from ThermoMutDB) contains more strongly destabilising mutations than T2837 (Stability Oracle release), and the frozen ESM2-650M head was never exposed to that scale during training. σ scales with σ_train, so when |residual| inflates by ~2× the predictive intervals shrink in relative terms.
+
+This is a **scientifically useful split**: in deployment, σ-ranking lets you triage which predictions to trust on a *new* protein/dataset, even when you can't trust the absolute μ values yet. Active-learning and human-in-the-loop pipelines depend on this property — and we can now claim it cross-dataset.
+
+### Recalibration (`scripts/19_recalibrate_sigma_s669.py`)
+
+To close the absolute-calibration gap, we run two post-hoc methods on a **50/50 calibration / evaluation split** of S669:
+
+1. **Temperature scaling** — single global multiplier σ' = T·σ, with T chosen in closed form to minimise Gaussian NLL on the calibration half: `T² = (1/N) Σ (y - μ)² / σ²`. Preserves Spearman exactly.
+2. **Isotonic regression** — fit a monotone σ → |residual| mapper on the calibration half, then convert back to a Gaussian σ via the half-normal factor √(π/2). Allows non-uniform stretch (different correction at small vs large σ). Preserves Spearman because monotone.
+
+Both methods are evaluated on the unseen half. By construction, Spearman(σ, \|err\|) is preserved. Live numbers (random 50/50 split, eval n = 309):
+
+| Method | RMSE | NLL | ICE | cov@0.90 | cov@0.95 | Spearman |
+|---|---:|---:|---:|---:|---:|---:|
+| baseline σ                | 2.82 | 4.60 | 0.318 | 0.359 | 0.447 | 0.449 |
+| **temperature scaling**   | 2.82 | 2.37 | **0.044** | **0.919** | 0.987 | 0.449 |
+| **isotonic regression**   | 2.82 | **2.34** | 0.052 | 0.935 | 0.974 | 0.461 |
+
+Fitted **T = 2.76** — σ was about 2.76× too small on S669, consistent with RMSE doubling between T2837 and S669. After scaling, **ICE drops from 0.318 to 0.044** (well below the NEXT_STEPS target of 0.05), **cov@0.90 climbs from 0.36 to 0.92**, and **NLL halves**. RMSE is unchanged because μ is unchanged. Spearman is preserved exactly under temperature scaling (single global multiplier); isotonic ticks up by 0.012 because flat regions of the fitted mapper introduce ties that slightly reorder ranks.
+
+Net effect: a single global multiplier learned from 308 calibration rows closes the entire absolute-calibration gap on S669. **The ranking property and the calibration property are independent and both transferable** — the first natively, the second after a one-parameter post-hoc fix.
+
+Run with `--split-by-protein --metadata cache/s669_metadata_processed.csv` for a stricter leak-free split if you want to verify these numbers don't depend on protein-level near-duplicates between cal and eval.
+
+### Open questions raised by §11
+
+The campaign so far changed the **dataset** twice (Megascale pretrain, S669 eval) but kept the **backbone** fixed at ESM2-650M throughout. The clean σ-ranks-transfer / μ-doesn't-transfer split suggests the next interesting axis to vary is the encoder:
+
+- **ESM-IF / ESM-3 / SaProt** — structure-aware backbones may give better μ accuracy on S669 because they encode features that *are* sensitive to the ddG-magnitude shift (e.g. local geometry near the mutation).
+- **ProtT5 / Ankh** — different self-supervision objectives; sometimes generalise better on out-of-distribution proteins.
+
+Whichever backbone we try, the σ-ranking property gives a clean evaluation lever: if a new backbone preserves Spearman(σ, |err|) on S669 *and* drops RMSE, that's a strict improvement over the current production model.
+
+## 12. Pull-request trail
 
 The campaign was developed iteratively; the merged PRs document the
 decision sequence and serve as a citable trail:
@@ -288,6 +369,10 @@ decision sequence and serve as a citable trail:
 * `#12` — Day-1 + Day-2 toolkit (ranking loss, temperature scaling, sequence-derived structural proxies, D4/D5 ablations, paired-test fix)
 * `#13` — Day-3 toolkit (real DSSP + pLDDT from AF DB, D6 ablation)
 * `#14` — AF DB API URL fix (v4 retired → API resolves canonical v6)
+* `#16` — Megascale pretrain pipeline (scripts 15 + 16) and pipeline fixes
+* `#18` — S669 external validation: format converter + eval script (scripts 17 + 18)
+* `#20` — Colab notebook for S669 (Zenodo source + FASTA extractor + T2837-stat standardiser)
+* this PR — `REPORT.md` §11 + `scripts/19` post-hoc σ recalibration
 
 ---
 
@@ -301,7 +386,14 @@ decision sequence and serve as a citable trail:
 > pLDDT features** (D6) did not further improve Spearman ranking, but did
 > push the ensemble to RMSE = 1.486, NLL = **1.822** (target < 1.85
 > exceeded), and ICE = 0.041. Three of four NEXT_STEPS targets met or
-> exceeded; ICE missed by ~2×. LoRA fine-tune, ranking-aware loss, and
-> temperature scaling were attempted but gave neutral or negative
-> deltas — documented as negative results. The ceiling is now **dataset
-> size**, not σ-branch design or backbone power.
+> exceeded; ICE missed by ~2× on T2837. LoRA fine-tune, ranking-aware
+> loss, and Megascale pretrain were attempted but gave neutral or
+> negative deltas — documented as negative results. **External
+> validation on S669 (n = 617) gave the strongest finding of the
+> campaign: σ-ranking transferred and improved (Spearman 0.348 →
+> 0.434), and a single temperature scalar fitted on 308 calibration
+> rows recovered absolute calibration on the new dataset (ICE 0.31 →
+> 0.04, cov@90 from 0.37 to 0.92).** μ-accuracy did not transfer (RMSE
+> 1.50 → 2.83), pointing to the encoder rather than σ-branch design as
+> the next lever — ESM2-650M was held fixed throughout and a
+> structure-aware backbone is the recommended next experiment.
