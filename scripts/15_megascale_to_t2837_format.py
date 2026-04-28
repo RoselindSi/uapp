@@ -128,6 +128,11 @@ def main() -> None:
     p.add_argument("--seed",          type=int,   default=42)
     p.add_argument("--ddg-col",       type=str,   default=None,
                    help="Override ΔG column name (default: try common ones)")
+    p.add_argument("--seq-col",       type=str,   default=None,
+                   help="Override sequence column.  Default: auto-detect — prefer "
+                        "aa_seq_full (Tsuboyama position numbering) over aa_seq.  "
+                        "If both fail to align with mut_type positions, the script "
+                        "tries the other automatically before giving up.")
     p.add_argument("--max-rows",      type=int,   default=None,
                    help="Optional cap on output rows for quick smoke runs")
     p.add_argument("--log-level",     type=str,   default="INFO")
@@ -141,7 +146,12 @@ def main() -> None:
 
     # ── Resolve column names ─────────────────────────────────────────────────
     name_col   = _pick(df, "name", "protein_name", "domain", "WT_name")
-    seq_col    = _pick(df, "aa_seq", "sequence", "wt_seq", "wt_aa_seq")
+    # NB: prefer aa_seq_full first.  In the Tsuboyama 2023 dataset the
+    # mut_type position (e.g. "I7L") is numbered against `aa_seq_full`
+    # (which includes the proteolysis tag prefix), not the shorter `aa_seq`.
+    seq_col    = (args.seq_col or
+                  _pick(df, "aa_seq_full", "aa_seq", "sequence",
+                        "wt_seq", "wt_aa_seq"))
     mut_col    = _pick(df, "mut_type", "mutation", "variant", "mutation_type")
     ddg_col    = args.ddg_col or _pick(
         df, "ddG_ML", "ddG", "ddg_ml", "ddg",
@@ -153,10 +163,40 @@ def main() -> None:
         if c is None:
             raise SystemExit(
                 f"Could not find a {n!r} column.  Available columns: {list(df.columns)}.\n"
-                "Pass --ddg-col explicitly, or rename your CSV columns."
+                "Pass --ddg-col / --seq-col explicitly, or rename your CSV columns."
             )
     log.info("Resolved columns: name=%s, seq=%s, mut=%s, ddg/dg=%s",
              name_col, seq_col, mut_col, ddg_col)
+
+    # ── Quick alignment sanity-check on the chosen seq column.  If it fails
+    #    on a sample of SAVs, automatically try the alternative (aa_seq vs
+    #    aa_seq_full) before doing the full pass.
+    def _alignment_rate(df_sample, seq_column):
+        ok = 0; tried = 0
+        for _, r in df_sample.iterrows():
+            parsed = parse_mut_type(r[mut_col])
+            if parsed is None: continue
+            wt_aa, pos, _ = parsed
+            seq = str(r[seq_column]).strip().upper()
+            if 1 <= pos <= len(seq) and seq[pos - 1] == wt_aa:
+                ok += 1
+            tried += 1
+            if tried >= 200: break
+        return ok / max(tried, 1)
+
+    sample = df.sample(n=min(2000, len(df)), random_state=0)
+    rate = _alignment_rate(sample, seq_col)
+    log.info("Alignment sanity-check: %.1f%% of sampled SAVs match seq column %r",
+             100 * rate, seq_col)
+    if rate < 0.5 and args.seq_col is None:
+        # Fall back to the alternative
+        alt = _pick(df, "aa_seq" if seq_col == "aa_seq_full" else "aa_seq_full")
+        if alt is not None and alt != seq_col:
+            alt_rate = _alignment_rate(sample, alt)
+            log.info("Trying alternative seq column %r: %.1f%% match", alt, 100 * alt_rate)
+            if alt_rate > rate:
+                log.info("Switching seq column to %r (better alignment)", alt)
+                seq_col = alt
 
     # ── Compute ΔΔG (pair each mutant with its wt) if we got a ΔG column ────
     is_ddg = ddg_col.lower().startswith("ddg")
