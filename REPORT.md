@@ -279,7 +279,9 @@ Output of step 4 contains the statistical-significance JSON in `significance.jso
 | `scripts/17_s669_to_t2837_format.py` | S669 release CSV → T2837-shaped CSV for external evaluation |
 | `scripts/18_evaluate_on_s669.py` | Train D5/D6 ensemble on full T2837, predict on S669, report metrics |
 | `scripts/19_recalibrate_sigma_s669.py` | Post-hoc σ recalibration on S669 — temperature scaling + isotonic regression on a held-out cal split |
+| `scripts/20_cache_embeddings_saprot.py` | SaProt embeddings (combined AA + 3Di tokens via FoldSeek) — drop-in encoder swap for §12 |
 | `notebooks/colab_s669_evaluation.ipynb` | End-to-end Colab walkthrough that ran the §11 evaluation |
+| `notebooks/colab_saprot_evaluation.ipynb` | End-to-end Colab walkthrough for §12 (SaProt on T2837 + S669) |
 | `notebooks/next_steps_comprehensive.ipynb`  | NEXT_STEPS Tracks A–D walkthrough on synthetic data |
 | `notebooks/colab_lora_finetune_d3.ipynb`    | Colab T4 notebook for LoRA fine-tune |
 
@@ -357,7 +359,21 @@ The campaign so far changed the **dataset** twice (Megascale pretrain, S669 eval
 
 Whichever backbone we try, the σ-ranking property gives a clean evaluation lever: if a new backbone preserves Spearman(σ, |err|) on S669 *and* drops RMSE, that's a strict improvement over the current production model.
 
-## 12. Pull-request trail
+## 12. Structure-aware backbone (in flight)
+
+The §11 finding that μ-accuracy doesn't transfer cross-dataset while σ-ranking and σ-calibration do points squarely at the encoder. ESM2-650M was held fixed for the entire campaign — every variation so far was on the head, the loss, or the data. The first natural axis we have not exercised is the encoder.
+
+`scripts/20_cache_embeddings_saprot.py` + `notebooks/colab_saprot_evaluation.ipynb` implement a drop-in swap to **SaProt** (Westlake/SJTU 2024), a structure-augmented PLM that takes combined `<aa><3di>` tokens, where the 3Di letters come from FoldSeek's structural tokenisation of a PDB. SaProt has the same hidden size (1280) and parameter count (650M) as ESM2-650M, so every downstream script (06, 18, 19) works unchanged.
+
+Why both T2837 and S669 are evaluated, not just S669:
+
+1. **In-distribution baseline.** Without T2837 we cannot tell whether SaProt is genuinely improving or just shifting the basin. The strict-improvement criterion needs both halves: T2837 RMSE ≤ 1.50 and Spearman ≥ 0.348 *and* S669 RMSE significantly < 2.83.
+2. **Recalibration scalar is encoder-specific.** T = 2.76 was fitted on ESM2's S669 σ. SaProt may have a different scale — the recalibration must be re-fitted before any "calibration transfers" claim can be made.
+3. **σ-ranking property is the most fragile.** SaProt's combined AA+3Di tokens change what the σ branch sees; we need to verify that Spearman(σ, |err|) ≥ 0.348 on T2837 *survives* the encoder swap before we can ask whether it improves on S669.
+
+Numbers will be appended here once the Colab notebook completes its run.
+
+## 13. Pull-request trail
 
 The campaign was developed iteratively; the merged PRs document the
 decision sequence and serve as a citable trail:
@@ -372,7 +388,8 @@ decision sequence and serve as a citable trail:
 * `#16` — Megascale pretrain pipeline (scripts 15 + 16) and pipeline fixes
 * `#18` — S669 external validation: format converter + eval script (scripts 17 + 18)
 * `#20` — Colab notebook for S669 (Zenodo source + FASTA extractor + T2837-stat standardiser)
-* this PR — `REPORT.md` §11 + `scripts/19` post-hoc σ recalibration
+* `#21` — `REPORT.md` §11 + `scripts/19` post-hoc σ recalibration
+* this PR — SaProt structure-aware backbone scaffolding (`scripts/20` + Colab notebook + REPORT §12)
 
 ---
 
