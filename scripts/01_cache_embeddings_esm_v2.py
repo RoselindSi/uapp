@@ -200,6 +200,9 @@ def main():
     parser.add_argument("--esm-model", type=str, default=DEFAULT_ESM_MODEL,
                         help="HuggingFace ESM-2 model id (default: 8M).  "
                              "Use facebook/esm2_t33_650M_UR50D for the 650M backbone.")
+    parser.add_argument("--metadata-out", type=Path, default=None,
+                        help="Where to save the processed mutation metadata CSV "
+                             "(default: <out-dir>/t2837_metadata.csv)")
     args = parser.parse_args()
 
     log = setup_logging()
@@ -313,7 +316,7 @@ def main():
     log.info("done. %s (%.1f MB)", args.out, args.out.stat().st_size / 1e6)
 
     # Also save the metadata DataFrame for the notebook's interpretability analysis
-    meta_csv_path = args.out.parent / "t2837_metadata.csv"
+    meta_csv_path = args.metadata_out if args.metadata_out is not None else args.out.parent / "t2837_metadata.csv"
     df.to_csv(meta_csv_path, index=False)
     log.info("saved mutation metadata to %s", meta_csv_path)
 
