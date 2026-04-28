@@ -84,13 +84,14 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # ─────────────────────────────────────────────────────────────────────────────
 # Bio-feature slicing — must match scripts/07_experiment_d_real.py exactly
 # ─────────────────────────────────────────────────────────────────────────────
-RSA_IDX = 0
-BIO_IDX = list(range(1, 7))     # chemistry: blosum, grantham, dCharge, dPolarity, dHydro, dVolume
-EXT_IDX = list(range(7, 13))    # structural: dHelix, dSheet, entropy, hydrophobic, charged, position-rel
+RSA_IDX  = 0
+BIO_IDX  = list(range(1, 7))     # chemistry
+EXT_IDX  = list(range(7, 13))    # sequence-derived structural
+DSSP_IDX = list(range(13, 21))   # DSSP + pLDDT (from scripts/14)
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
-    """Slice columns of the bio-feature tensor for one of D0..D5.  See script 07."""
+    """Slice columns of the bio-feature tensor for one of D0..D6.  See script 07."""
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -109,6 +110,14 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         if ablation == "D4":
             return feats[:, EXT_IDX]
         return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
+    if ablation == "D6":
+        if feats.shape[-1] < 21:
+            raise ValueError(
+                f"ablation 'D6' requires DSSP+pLDDT bio features (k=21); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/14_compute_structural_features.py."
+            )
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX + DSSP_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -208,8 +217,9 @@ def main() -> None:
     p.add_argument("--embeddings", required=True, type=Path)
     p.add_argument("--bio-feats",  required=True, type=Path)
     p.add_argument("--out",        required=True, type=Path)
-    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5"], default="D1",
-                   help="D4/D5 require an --include-extended bio-feats file.")
+    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5", "D6"], default="D1",
+                   help="D4/D5 require --include-extended bio file; "
+                        "D6 requires DSSP+pLDDT bio file from scripts/14.")
     p.add_argument("--members",    type=int, default=5)
     p.add_argument("--seed",       type=int, default=42, help="seed for member 0; member k uses seed+k")
     p.add_argument("--batch-size", type=int, default=128)

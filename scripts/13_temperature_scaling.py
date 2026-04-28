@@ -77,11 +77,14 @@ from uapp.utils import ensure_dir, get_device, set_seed, setup_logging
 # ─────────────────────────────────────────────────────────────────────────────
 # Bio-feature slicing — same convention as scripts/07, 10, 11
 # ─────────────────────────────────────────────────────────────────────────────
-RSA_IDX = 0
-BIO_IDX = list(range(1, 7))
+RSA_IDX  = 0
+BIO_IDX  = list(range(1, 7))      # chemistry
+EXT_IDX  = list(range(7, 13))     # sequence-derived structural
+DSSP_IDX = list(range(13, 21))    # DSSP + pLDDT (from scripts/14)
 
 
 def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
+    """Slice columns of the bio-feature tensor for one of D0..D6.  See script 07."""
     if ablation == "D0":
         return None
     if ablation == "D1":
@@ -90,6 +93,24 @@ def select_features(feats: torch.Tensor, ablation: str) -> torch.Tensor | None:
         return feats[:, BIO_IDX]
     if ablation == "D3":
         return feats[:, [RSA_IDX] + BIO_IDX]
+    if ablation in ("D4", "D5"):
+        if feats.shape[-1] < 13:
+            raise ValueError(
+                f"ablation {ablation!r} requires extended bio features (k=13); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/06_build_bio_features.py with --include-extended."
+            )
+        if ablation == "D4":
+            return feats[:, EXT_IDX]
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX]
+    if ablation == "D6":
+        if feats.shape[-1] < 21:
+            raise ValueError(
+                f"ablation 'D6' requires DSSP+pLDDT bio features (k=21); "
+                f"got bio file with k={feats.shape[-1]}.  Re-run "
+                "scripts/14_compute_structural_features.py."
+            )
+        return feats[:, [RSA_IDX] + BIO_IDX + EXT_IDX + DSSP_IDX]
     raise ValueError(f"unknown ablation: {ablation}")
 
 
@@ -220,8 +241,8 @@ def main() -> None:
                    help="If supplied, skip training and read val/test predictions from this npz "
                         "(keys: val_mu, val_sigma, val_y, test_mu, test_sigma, test_y).")
     p.add_argument("--out",        required=True, type=Path)
-    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5"], default="D3",
-                   help="D4/D5 require a bio-feats file built with --include-extended.")
+    p.add_argument("--ablation",   choices=["D0", "D1", "D2", "D3", "D4", "D5", "D6"], default="D3",
+                   help="D4/D5 require --include-extended; D6 requires scripts/14 output.")
 
     # Training hyperparameters (used when --predictions-npz is not given)
     p.add_argument("--batch-size",     type=int,   default=128)
