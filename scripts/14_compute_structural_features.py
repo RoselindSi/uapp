@@ -96,23 +96,56 @@ def _classify_ss(ss: str) -> tuple[float, float]:
 # ─────────────────────────────────────────────────────────────────────────────
 # AlphaFold DB download
 # ─────────────────────────────────────────────────────────────────────────────
-def af_url(uniprot_id: str, version: int = 4) -> str:
-    return f"https://alphafold.ebi.ac.uk/files/AF-{uniprot_id}-F1-model_v{version}.pdb"
+# We don't hard-code a model version (v4/v5/v6 etc.) because AF DB rotates
+# them — direct construction "AF-{uniprot}-F1-model_v4.pdb" goes 404 once
+# the canonical version moves on.  Instead we ask the AF DB JSON API for
+# the canonical PDB URL per accession, which always points at the live model.
+AF_API = "https://alphafold.ebi.ac.uk/api/prediction/{accession}"
+
+
+def get_af_pdb_url(uniprot_id: str, log, timeout: float = 10.0) -> str | None:
+    """Resolve the canonical AF PDB URL for an accession via the public API."""
+    api = AF_API.format(accession=uniprot_id)
+    try:
+        with urllib.request.urlopen(api, timeout=timeout) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        log.warning("AF API failed for %s: HTTP %s", uniprot_id, e.code)
+        return None
+    except Exception as e:
+        log.warning("AF API failed for %s: %s", uniprot_id, e)
+        return None
+    if not data:
+        log.warning("AF API returned empty list for %s (no prediction available)",
+                    uniprot_id)
+        return None
+    return data[0].get("pdbUrl")
 
 
 def download_af(uniprot_id: str, cache_dir: Path, log) -> Path | None:
-    """Fetch AF model PDB into cache_dir; return path or None on failure."""
+    """Fetch AF model PDB into cache_dir; return path or None on failure.
+
+    Uses the AF DB API to resolve the canonical PDB URL (handles version
+    rotation; the direct .../files/AF-X-F1-model_v4.pdb pattern goes 404 once
+    the API rotates the canonical version).
+    """
     cache_dir.mkdir(parents=True, exist_ok=True)
     dst = cache_dir / f"AF-{uniprot_id}.pdb"
     if dst.exists() and dst.stat().st_size > 0:
         return dst
+
+    pdb_url = get_af_pdb_url(uniprot_id, log)
+    if pdb_url is None:
+        return None
     try:
-        urllib.request.urlretrieve(af_url(uniprot_id), dst)
+        urllib.request.urlretrieve(pdb_url, dst)
         return dst
     except urllib.error.HTTPError as e:
-        log.warning("AF DB download failed for %s: HTTP %s", uniprot_id, e.code)
+        log.warning("AF download failed for %s (%s): HTTP %s",
+                    uniprot_id, pdb_url, e.code)
     except Exception as e:
-        log.warning("AF DB download failed for %s: %s", uniprot_id, e)
+        log.warning("AF download failed for %s (%s): %s",
+                    uniprot_id, pdb_url, e)
     return None
 
 
