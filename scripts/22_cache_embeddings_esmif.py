@@ -200,8 +200,18 @@ def get_residue_embeddings_esmif(pdb_path: Path, chain_id: str,
     if coords is None or native_seq is None or len(native_seq) == 0:
         return "ERR:load_coords:empty"
     try:
-        rep = eif.util.get_encoder_output(model, alphabet, coords)
-        rep = rep.to("cpu")  # (L, 512)
+        # eif.util.get_encoder_output builds CPU tensors and forwards them to
+        # the model without moving — that crashes when the model is on cuda.
+        # Re-implement with explicit device transfer.
+        batch_converter = eif.util.CoordBatchConverter(alphabet)
+        batch_coords, confidence, _, _, padding_mask = batch_converter(
+            [(coords, None, None)], device=device,
+        )
+        encoder_out = model.encoder.forward(
+            batch_coords, padding_mask, confidence, return_all_hiddens=False,
+        )
+        # encoder_out["encoder_out"][0] has shape (L_padded, B, C); strip BOS/EOS
+        rep = encoder_out["encoder_out"][0][1:-1, 0].to("cpu")  # (L, 512)
     except Exception as e:
         return f"ERR:encoder:{type(e).__name__}:{e}"
     if rep.shape[0] != len(native_seq):
