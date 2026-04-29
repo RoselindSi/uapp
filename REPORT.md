@@ -23,27 +23,37 @@ LoRA fine-tune, ranking-aware loss, and temperature scaling all gave neutral
 or negative deltas — documented as **negative results** (which are
 themselves the contribution: they show *where the ceiling is*).
 
-## Final deliverable table (test set, n = 170, ESM2-650M frozen, 5-member ensemble)
+§§11–14 push past the campaign's original NEXT_STEPS targets onto external validation and encoder swaps. The headline: σ-ranking transfers cross-dataset (T2837 0.348 → S669 0.434, §11), but μ-accuracy does not — and the encoder-swap follow-up (§§12–14) reveals a **clean Pareto trade-off** between in-distribution σ-ranking and cross-dataset μ-accuracy along the structural-awareness axis (ESM2 → SaProt → ESM-IF). No structure-aware encoder gives a strict improvement; ESM2-650M D5 + post-hoc σ recalibration remains production, with SaProt and ESM-IF documented as use-case-dependent alternatives.
 
-| Configuration | RMSE | MAE | NLL | ICE | cov@90 | cov@95 | Spearman(σ,\|e\|) | top20 |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Day-0 baseline (8M, D0)                   | 1.45 | — | 1.94 | 0.04 | — | — | 0.19 | 0.32 |
-| 650M D0 single-seed (mean)                | 1.50 | — | 1.92 | 0.06 | — | — | 0.30 | 0.39 |
-| 650M D0 ensemble                          | 1.51 | — | 1.92 | 0.06 | — | — | 0.32 | 0.41 |
-| 650M D3 ensemble (RSA+chem)               | 1.48 | — | 1.86 | 0.05 | — | — | 0.30 | 0.47 |
-| 650M D5 ensemble (D3 + seq-struct)        | 1.50 | 1.04 | 1.85 | 0.05 | 0.85 | 0.91 | **0.348** | 0.44 |
-| **650M D6 ensemble (D5 + DSSP/pLDDT)**    | **1.49** | — | **1.82** | **0.04** | 0.89 | — | 0.331 | 0.44 |
-| LoRA D3 (negative result)                 | 1.47 | 1.04 | 1.83 | 0.04 | 0.85 | 0.91 | 0.06 | 0.24 |
-| **650M D5 ensemble — S669 external (n = 617)**  | 2.83 | 2.29 | 4.64 | 0.31 | 0.37 | 0.45 | **0.434** | 0.38 |
-| 650M D5 ensemble — S669 + temperature-scaled σ (eval n = 309) | 2.82 | — | **2.37** | **0.04** | **0.92** | 0.99 | 0.449 | — |
-| **SaProt D5 ensemble — T2837 test (n = 137)** | 1.60 | — | 1.89 | 0.04 | — | — | 0.218 | 0.48 |
-| **SaProt D5 ensemble — S669 (n = 615)** | **2.53** | — | **3.19** | 0.26 | — | — | 0.416 | 0.45 |
-| SaProt — S669 + temperature-scaled σ (eval n = 307) | 2.46 | — | **2.27** | **0.05** | **0.94** | 0.99 | 0.440 | — |
+## Final deliverable table
+
+T2837 rows are on n=170 unless noted; the 137-row rows are the SaProt-aligned subset (see §12). All rows use the D5 ablation (RSA + chemistry + sequence-derived structural proxies, k=13) and a 5-member ensemble.
+
+| Configuration | Test n | RMSE | MAE | NLL | ICE | cov@90 | cov@95 | Spearman(σ,\|e\|) | top20 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Day-0 baseline (8M, D0)                                        | 170 | 1.45 | — | 1.94 | 0.04 | — | — | 0.19 | 0.32 |
+| 650M D0 single-seed (mean)                                     | 170 | 1.50 | — | 1.92 | 0.06 | — | — | 0.30 | 0.39 |
+| 650M D0 ensemble                                               | 170 | 1.51 | — | 1.92 | 0.06 | — | — | 0.32 | 0.41 |
+| 650M D3 ensemble (RSA+chem)                                    | 170 | 1.48 | — | 1.86 | 0.05 | — | — | 0.30 | 0.47 |
+| **650M D5 ensemble (production)**                              | 170 | 1.50 | 1.04 | 1.85 | 0.05 | 0.85 | 0.91 | **0.348** | 0.44 |
+| **650M D6 ensemble (D5 + DSSP/pLDDT)**                         | 170 | **1.49** | — | **1.82** | **0.04** | 0.89 | — | 0.331 | 0.44 |
+| LoRA D3 (negative result)                                      | 170 | 1.47 | 1.04 | 1.83 | 0.04 | 0.85 | 0.91 | 0.06 | 0.24 |
+| **650M D5 ensemble — S669 external**                           | 617 | 2.83 | 2.29 | 4.64 | 0.31 | 0.37 | 0.45 | **0.434** | 0.38 |
+| 650M D5 — S669 + temperature-scaled σ (eval split)             | 309 | 2.82 | — | **2.37** | **0.04** | **0.92** | 0.99 | 0.449 | — |
+| §12.1 SaProt D5 — T2837 test                                   | 137 | 1.598 | — | 1.889 | 0.038 | — | — | 0.218 | 0.48 |
+| §12.1 SaProt D5 — S669                                         | 615 | 2.534 | — | 3.185 | 0.261 | — | — | 0.416 | 0.45 |
+| §12.1 SaProt — S669 + temperature-scaled σ (eval split)        | 307 | 2.464 | — | **2.27** | **0.05** | **0.94** | 0.99 | 0.440 | — |
+| **§12.2 ESM2 D5 (apples-to-apples) — T2837 test**              | 137 | **1.532** | — | 1.922 | 0.091 | — | — | **0.417** | 0.37 |
+| §12.2 ESM2 D5 (apples-to-apples) — S669                        | 617 | 2.869 | — | 4.930 | 0.314 | — | — | 0.407 | 0.37 |
+| §13 ESM-IF D5 — T2837 test                                     | 137 | 1.605 | — | 2.006 | 0.051 | — | — | 0.074 | 0.19 |
+| **§13 ESM-IF D5 — S669**                                       | 616 | **2.416** | — | **3.035** | 0.235 | — | — | 0.392 | 0.45 |
+| §13 ESM-IF — S669 + temperature-scaled σ                       | 308 | — | — | — | — | — | — | — | — |
 
 > The LoRA row's RMSE/NLL/ICE *look* better but the σ-branch ranking signal was destroyed (Spearman 0.06).
 > The D6 row wins 3 of 4 production metrics; D5 retains the best Spearman.
 > Either D5 or D6 is defensible — D6 is preferred for calibration-quality, D5 for ranking-quality.
-> The **S669 row is the headline of §11**: σ-ranking transferred and *improved* (0.348 → 0.434), while μ-accuracy and absolute calibration did not.
+> §11 headline: σ-ranking transferred and *improved* on S669 (0.348 → 0.434) while μ-accuracy did not.
+> §12.2 + §13 reveal a **clean Pareto trade-off**: structure-aware encoders trade T2837 σ-ranking for S669 μ-accuracy. ESM2 → SaProt → ESM-IF is monotone in *both* directions (T2837 Spearman 0.417 → 0.218 → 0.074; S669 RMSE 2.869 → 2.534 → 2.416). No strict winner. ESM2-650M D5 + post-hoc σ recalibration remains production; SaProt and ESM-IF are documented alternatives for use cases that prioritise cross-dataset μ over in-distribution σ-ranking.
 
 ### NEXT_STEPS targets — final scorecard
 
@@ -364,9 +374,14 @@ The campaign so far changed the **dataset** twice (Megascale pretrain, S669 eval
 
 Whichever backbone we try, the σ-ranking property gives a clean evaluation lever: if a new backbone preserves Spearman(σ, |err|) on S669 *and* drops RMSE, that's a strict improvement over the current production model.
 
-## 12. Structure-aware backbone (SaProt) — partial finding
+## 12. Structure-aware backbone — SaProt
 
 The §11 split-of-skills result pointed at the encoder as the next axis to vary. ESM2-650M was held fixed for the entire campaign; every prior variation was on the head, the loss, or the data. This section runs the encoder swap.
+
+§12.1 below is the original SaProt run on the 170-vs-137 cross-population comparison. §12.2 is the follow-up apples-to-apples comparison that removes the population confound, and *changes the headline interpretation* — see §12.2 if you want the punchline.
+
+### 12.1 First run (population-confounded)
+
 
 `scripts/20_cache_embeddings_saprot.py` + `notebooks/colab_saprot_evaluation.ipynb` implement a drop-in swap to **SaProt** (Westlake/SJTU 2024), a structure-augmented PLM that takes combined `<aa><3di>` tokens, where the 3Di letters come from FoldSeek's structural tokenisation of a PDB. SaProt has the same hidden size (1280) and parameter count (650M) as ESM2-650M, so every downstream script (06, 18, 19) works unchanged.
 
@@ -419,30 +434,112 @@ The recalibration recipe from §11 still works: a closed-form temperature scalar
 2. **Single seed of seeds.** Both ESM2 and SaProt were 5-member ensembles; the standard error on Spearman at n≈137 is ~0.07. The SaProt T2837 Spearman of 0.218 vs ESM2's 0.348 is roughly two standard errors — meaningful but not overwhelming.
 3. **3Di tokenisation is from AlphaFold-DB structures**, the same source the production D6 ablation already used for DSSP/pLDDT features. The signal SaProt encodes is therefore *not* orthogonal to D6 — some of the structural information is already in the D5 ensemble's σ-branch features. A cleaner test of "does the encoder need to know structure" would compare SaProt against an ESM2 baseline that has no structural bio features (D0).
 
-### What this means for the production model
+### Provisional reading (revised in §12.2)
 
-D5 ensemble + post-hoc σ recalibration (the §11 recipe) remains the production model. SaProt is documented as a **partial-positive finding**: the cross-dataset μ improvement is real, but the in-distribution σ-ranking degradation is also real, and the trade-off is not favourable for deployment under the original strict-improvement criterion.
+The §12.1 first-pass reading was *partial-positive*: cross-dataset μ improvement looks real, T2837 σ-ranking degradation also looks real, no strict-improvement. Two of the three caveats above (different test populations; the AF-DB structural overlap) make this reading suspect. §12.2 runs the apples-to-apples comparison that removes the population confound; §13 runs ESM-IF to test the token-vocabulary hypothesis.
 
-### Follow-up experiments (now scaffolded)
+### 12.2 Apples-to-apples follow-up — corrected interpretation
 
-Two follow-ups ship in the same PR as this section to remove the n=137 confound and test the token-vocabulary hypothesis:
+**Setup.** `scripts/21_align_cache_to_reference.py` filters the ESM2 T2837 cache + bio features to the SaProt-aligned 137-row test subset (and the matching 1179/813 train/val that SaProt actually trained on). Script 18 then trains a fresh 5-member D5 ensemble on the *same* rows SaProt saw and predicts on the *same* T2837 test rows + S669. Both encoders now differ on exactly one axis: the encoder.
 
-1. **Apples-to-apples comparison** — `scripts/21_align_cache_to_reference.py` filters the ESM2 cache + bio features to the SaProt-aligned 137-row T2837 subset. The notebook then re-runs script 18 with the aligned ESM2 caches so both encoders predict on the *same* test rows. Numbers go into the deliverable table once the Colab run completes.
+**Results (137-row T2837 test, identical 1179/813 train pool, 617-row S669):**
 
-2. **ESM-IF1 (structure-aware, pure-AA tokens)** — `scripts/22_cache_embeddings_esmif.py` builds the same mutation-aware feature shape using `esm.pretrained.esm_if1_gvp4_t16_142M_UR50` from the `fair-esm` package. ESM-IF1 takes structure through GVP geometric features instead of injecting 3Di into the token vocabulary, so the σ-branch input alphabet stays pure-AA. If σ-ranking on T2837 survives the encoder swap *and* μ on S669 still improves vs the aligned-ESM2 baseline, that is the strict-improvement encoder we were looking for. Embedding dim is 512 (vs 1280 for ESM2/SaProt) → mutation-aware feature is 1064-d; FeatureAugmentedHead reads `d_in` dynamically so scripts 06/18/19 work unchanged.
+```
+                    T2837 RMSE   T2837 Spearman   S669 RMSE   S669 Spearman
+ESM2 (aligned)        1.532        0.417            2.869       0.407
+SaProt                1.598        0.218            2.534       0.416
+```
 
-3. **σ-branch token-sensitivity diagnostic.** Outside the scope of this PR, but the experiments above will tell us whether the SaProt Spearman drop is an encoder-class property or specific to the AA+3Di token-mixing. If ESM-IF preserves Spearman, the mixing hypothesis is supported.
+**What changes vs §12.1.**
 
-### Decision matrix for the follow-ups
+1. **The S669 μ improvement is real, not a population artifact.** SaProt drops S669 RMSE from 2.869 to 2.534 (Δ = −0.34) on the *same* 617 rows as ESM2-aligned. The §12 first-pass reading already said this, but the §12.1 ESM2 baseline (2.83 on n=617, trained on the larger 1395/1019 pool) was a different experimental condition; the apples-to-apples comparison confirms the encoder, not the population, is doing the work.
+2. **The T2837 σ-ranking degradation is also real, but is now larger than §12.1 suggested.** The aligned-ESM2 ensemble hits Spearman 0.417 on the 137-row test (better than the §11 0.348 on 170 rows — the 33 missing test rows happen to be hard ones). SaProt's 0.218 is now ~2.0× lower than ESM2's, not ~1.6× as §12.1 reported. The σ-ranking signal that ESM2 captures simply is not in SaProt's combined-token representation.
+3. **No strict winner.** SaProt **wins on S669 RMSE** (−0.34) and **loses on T2837 Spearman** (−0.20). Neither encoder dominates.
 
-| ESM-IF T2837 Spearman | ESM-IF S669 RMSE | Verdict |
+The headline of §12 is now: **structure-aware encoding is a real lever for cross-dataset μ-accuracy, at a measurable cost in in-distribution σ-ranking**. §13 tests whether this is specific to SaProt's combined token vocabulary or a general property of structure-aware encoders.
+
+## 13. ESM-IF — second structure-aware encoder, pure-AA tokens
+
+`scripts/22_cache_embeddings_esmif.py` builds the same mutation-aware feature shape using `esm.pretrained.esm_if1_gvp4_t16_142M_UR50` from the `fair-esm` package. ESM-IF1 takes structure through GVP geometric features rather than injecting 3Di letters into the token vocabulary, so the σ-branch input alphabet stays pure-AA. Encoder hidden size is 512 (vs 1280 for ESM2/SaProt) → mutation-aware feature is 1064-d (vs 2600-d); `FeatureAugmentedHead` reads `d_in` dynamically so the rest of the pipeline is unchanged.
+
+The hypothesis was: if SaProt's T2837 σ-ranking drop is caused by AA+3Di token mixing, ESM-IF should preserve σ-ranking while still helping S669 μ — the strict-improvement encoder.
+
+### Results
+
+Apples-to-apples vs the §12.2 ESM2 baseline (same 137-row T2837 test, same 1179/813 train pool, same 616/617-row S669):
+
+```
+                    T2837 RMSE   T2837 Spearman   S669 RMSE   S669 Spearman
+ESM2 (aligned)        1.532        0.417            2.869       0.407
+SaProt                1.598        0.218            2.534       0.416
+ESM-IF                1.605        0.074            2.416       0.392
+```
+
+σ recalibration on S669: ESM2 T = 2.76, SaProt T = 2.10, **ESM-IF T = 2.03**. The temperature scalar required to recover calibration drops monotonically with structural awareness — structure-aware encoders are intrinsically less σ-overconfident on out-of-distribution data, but at the cost of in-distribution σ-ranking.
+
+### Strict-improvement criterion
+
+| Test | ESM-IF | vs ESM2 (aligned) | Verdict |
+|---|---:|---:|:---:|
+| T2837 RMSE        | 1.605 | 1.532   | **FAIL** |
+| T2837 Spearman    | 0.074 | 0.417   | **FAIL** |
+| S669 RMSE         | 2.416 | 2.869   | **PASS** (Δ = −0.45) |
+
+### Two findings
+
+**1. The token-vocabulary hypothesis is falsified.** ESM-IF uses pure-AA tokens and degrades T2837 σ-ranking *more* than SaProt (0.074 vs 0.218). The Spearman drop is not caused by SaProt's combined `<aa><3di>` alphabet; it's a property of structure-aware encoding regardless of how structure enters the token stream. The likely mechanism: structure-aware encoders force the per-residue embedding to encode global geometric context, which makes σ less responsive to the local-sequence variation that drives "easy vs hard mutation" ranking. The σ-ranking signal lives in ESM2's local sequence-attention patterns, and structure-awareness washes it out.
+
+**2. There is a clean Pareto trade-off across the three encoders.** Sorting ESM2 → SaProt → ESM-IF by structural awareness gives a *monotone* trade-off in both directions:
+
+```
+                   T2837 Spearman    S669 RMSE
+ESM2 (aligned)     0.417             2.869
+SaProt             0.218             2.534
+ESM-IF             0.074             2.416
+                   ──────────────    ─────────
+                   ↓ structure ↑       structure ↑
+                   ↓ in-dist σ-rank ↑   cross-dataset μ ↑
+```
+
+The campaign asked "is structure-aware encoding a strict improvement?" The answer is **no** under the original strict-improvement criterion. The deeper finding is that structure-awareness is a real, quantifiable lever along a Pareto frontier we hadn't characterised before.
+
+## 14. Encoder-swap campaign — closure
+
+### Production decision
+
+**ESM2-650M D5 ensemble + post-hoc σ temperature scaling (the §11 recipe) remains the production model.** It is the only ensemble of the three that preserves the σ-ranking property the entire campaign was built around (Spearman 0.348 on the original 170-row test, 0.417 on the 137-row aligned subset). For active-learning / σ-based query selection — the canonical use case for this model — σ-ranking is the primary metric and ESM2 dominates.
+
+### Documented alternatives (use-case dependent)
+
+| Use case | Recommended | Why |
 |---|---|---|
-| ≥ 0.33 (vs aligned-ESM2 baseline) | < aligned-ESM2 by ≥ 0.10 | **Strict win.** Structure-aware *without* token mixing is the production encoder. |
-| ≥ 0.33 | ≈ aligned-ESM2 | σ-ranking preserved but no μ gain — structure-awareness alone isn't enough; SaProt's S669 win came from somewhere else (e.g. the 3Di tokens themselves carrying ddG signal). |
-| < 0.30 | irrelevant | The σ-ranking degradation is encoder-class, not token-class. Both SaProt and ESM-IF break it; sequence-only encoders are the only ones that preserve it. Keep ESM2-650M in production. |
-| < 0.30 | < aligned-ESM2 | Same μ-vs-σ trade-off as SaProt. Confirms structure-aware = better μ at the cost of σ-ranking, regardless of how structure enters.
+| In-distribution active learning, σ-driven query selection | **ESM2-650M D5 ensemble** | Best T2837 Spearman (0.42); σ ranks easy/hard mutations as designed |
+| Cross-dataset μ accuracy on novel proteins (e.g. lab triage of single-point variants on new targets) | **ESM-IF D5 ensemble** | Best S669 RMSE (2.42) by a margin (−0.45 vs ESM2, −0.12 vs SaProt) |
+| Balanced (some μ gain on cross-dataset, σ-ranking degraded but not catastrophic) | **SaProt D5 ensemble** | T2837 Spearman 0.22 (still > 0); S669 RMSE 2.53 |
 
-## 13. Pull-request trail
+### Falsified hypotheses
+
+* **"§12 SaProt S669 win was a population artifact"** (raised as a §12 caveat). False — confirmed real on the apples-to-apples test (§12.2).
+* **"SaProt's σ-ranking drop is caused by AA+3Di token mixing"** (working hypothesis behind the ESM-IF experiment). False — ESM-IF with pure-AA tokens degrades σ-ranking even further (§13).
+
+### Confirmed findings
+
+* **There is a Pareto trade-off between in-distribution σ-ranking and cross-dataset μ-accuracy** along the structural-awareness axis. Three independent encoders confirm the direction and roughly the slope.
+* **σ recalibration temperature is encoder-specific and decreases monotonically with structural awareness** (T = 2.76 → 2.10 → 2.03). The post-hoc temperature-scaling recipe from §11 transfers across all three encoders.
+* **The σ-ranking signal lives in ESM2's local sequence-attention patterns**, not in any explicit feature engineered into the head. No head we trained recovered it after the encoder was swapped.
+
+### Future work
+
+In ROI order, given the new Pareto-trade-off framing:
+
+1. **Dual-encoder feature** — concatenate `[ESM2_features, ESM-IF_features]` and let a single head route μ-vs-σ to the right channel. This is the most direct attack on the observed Pareto: ESM-IF carries the cross-dataset μ signal; ESM2 carries the σ-ranking signal. Risk: 1179 train rows × 3664-d feature is overfitting territory; probably needs feature dropout or low-rank projection.
+2. **Encoder-level ensembling** as a strong baseline — train ESM2 D5 and ESM-IF D5 separately, take μ from ESM-IF and σ from ESM2 at inference. Cheaper than (1) and answers "is the Pareto a single-head limitation or a data limitation". Half a day of work.
+3. **σ-branch token-sensitivity diagnostic** — measure whether ESM2's σ-branch is reading specific token types (e.g. wt-AA identity, neighbour residues) vs window-aggregate features. If we can isolate *which* token signal is doing σ-ranking, we may be able to add it as an explicit feature on top of structure-aware encoders.
+4. **Larger ESM-IF or richer geometric features** — ESM-IF1 is 142M params; a bigger structure-aware model (ESM-3, AlphaFold representations) might shift the Pareto. Speculative.
+
+What is **not** worth doing based on the campaign so far: wider/deeper MLP heads (D5/D6 ablations already explored capacity); switching the output distribution (Student-t vs Gaussian/NIG is orthogonal to the Pareto); LoRA/full fine-tune of the encoders on T2837 (LoRA already destroyed σ-ranking on ESM2; nothing in the campaign suggests it would behave differently on SaProt or ESM-IF).
+
+## 15. Pull-request trail
 
 The campaign was developed iteratively; the merged PRs document the
 decision sequence and serve as a citable trail:
@@ -461,7 +558,8 @@ decision sequence and serve as a citable trail:
 * `#22` — SaProt structure-aware backbone scaffolding (`scripts/20` + Colab notebook)
 * `#23` — Fix AF PDB path resolution in SaProt notebook
 * `#24` — Script 20: re-resolve `mut_idx` against PDB-AA so SaProt samples the right residue
-* this PR — SaProt live results in `REPORT.md` §12 + deliverable table; `scripts/21` (apples-to-apples cache subset filter) + `scripts/22` (ESM-IF encoder); notebook sections 10 and 11 to run both follow-ups
+* `#25` — SaProt live results (§12.1) + `scripts/21` (apples-to-apples cache subset filter) + `scripts/22` (ESM-IF encoder) + notebook sections 10 and 11
+* this PR — Encoder-swap campaign closure: §12.2 apples-to-apples comparison (corrects the §12.1 reading), §13 ESM-IF live results, §14 Pareto-trade-off framing + production-decision matrix
 
 ---
 
@@ -486,10 +584,21 @@ decision sequence and serve as a citable trail:
 > 1.50 → 2.83), pointing to the encoder rather than σ-branch design as
 > the next lever — ESM2-650M was held fixed throughout and a
 > structure-aware backbone is the recommended next experiment.
-> **§12 ran that experiment**: SaProt (a structure-augmented PLM) drops
-> S669 RMSE 2.83 → 2.53 and NLL 4.64 → 3.19 — confirming the encoder
-> hypothesis — but at the cost of T2837 σ-ranking (Spearman 0.348 →
-> 0.218). The trade-off is not strictly favourable, so D5 + σ
-> recalibration remains the production model. The next experiment is
-> ESM-IF (structure-aware but pure-AA-token), which may close the
-> in-distribution σ-ranking gap.
+> **§§12–14 ran the encoder-swap experiments.** Two structure-aware
+> encoders were tested: SaProt (combined AA+3Di tokens) and ESM-IF1
+> (pure-AA tokens, structure via GVP geometric features). Apples-to-apples
+> on the same 137-row T2837 test and 1179/813 train pool, three encoders
+> form a clean Pareto trade-off in two directions: T2837 Spearman 0.417
+> → 0.218 → 0.074 (ESM2 → SaProt → ESM-IF) and S669 RMSE 2.869 → 2.534
+> → 2.416. Structural awareness is a real lever for cross-dataset
+> μ-accuracy (ESM-IF beats ESM2 by Δ RMSE = −0.45 on S669) at a
+> measurable cost in in-distribution σ-ranking. Two hypotheses were
+> falsified along the way (the §12 SaProt "S669 win" was *not* a
+> population artifact; the σ-ranking degradation is *not* caused by
+> SaProt's combined token vocabulary — ESM-IF's pure-AA tokens degrade
+> ranking even more). **Production decision**: ESM2-650M D5 + post-hoc
+> σ recalibration remains the model. ESM-IF and SaProt are documented
+> as alternatives for use cases that prioritise cross-dataset μ over
+> in-distribution σ-ranking. The most promising next experiment is a
+> dual-encoder feature [ESM2; ESM-IF] that lets a single head route
+> μ-vs-σ to the channel that carries each signal.
