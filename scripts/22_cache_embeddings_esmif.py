@@ -185,29 +185,27 @@ def load_esmif(device: torch.device):
 @torch.no_grad()
 def get_residue_embeddings_esmif(pdb_path: Path, chain_id: str,
                                  model, alphabet, device: torch.device,
-                                 ) -> tuple[torch.Tensor, str] | None:
+                                 ) -> tuple[torch.Tensor, str] | str:
     """Per-residue ESM-IF embeddings.
 
-    Returns (rep, native_seq) where:
-      rep        : Tensor of shape (L, 512) — encoder output.
-      native_seq : 1-letter AA string of length L extracted from the PDB.
-
-    Returns None if loading or inference fails.
+    Returns (rep, native_seq) on success, or an error-string starting with
+    "ERR:" describing the failure mode.  Callers should treat anything
+    that is not a 2-tuple as a failure.
     """
     import esm.inverse_folding as eif
     try:
         coords, native_seq = eif.util.load_coords(str(pdb_path), chain_id)
     except Exception as e:
-        return None
+        return f"ERR:load_coords:{type(e).__name__}:{e}"
     if coords is None or native_seq is None or len(native_seq) == 0:
-        return None
+        return "ERR:load_coords:empty"
     try:
         rep = eif.util.get_encoder_output(model, alphabet, coords)
         rep = rep.to("cpu")  # (L, 512)
-    except Exception:
-        return None
+    except Exception as e:
+        return f"ERR:encoder:{type(e).__name__}:{e}"
     if rep.shape[0] != len(native_seq):
-        return None
+        return f"ERR:len_mismatch:rep={rep.shape[0]} seq={len(native_seq)}"
     return rep, native_seq
 
 
@@ -277,6 +275,7 @@ def main() -> None:
     rep_cache: dict[str, torch.Tensor] = {}
     seq_cache: dict[str, str] = {}
     n_no_pdb = n_load_fail = 0
+    err_samples: list[str] = []
     for _, row in tqdm(unique.iterrows(), total=len(unique),
                        desc="ESM-IF reps", unit="prot"):
         pdb_path = resolve_pdb_path(args.pdb_dir, row, args.pdb_pattern,
@@ -286,13 +285,20 @@ def main() -> None:
         chain = (str(row[args.pdb_chain_col]).strip()
                  if args.pdb_chain_col else args.pdb_chain)
         result = get_residue_embeddings_esmif(pdb_path, chain, model, alphabet, device)
-        if result is None:
-            n_load_fail += 1; continue
-        rep, native_seq = result
-        rep_cache[str(row["pdb_code"])] = rep
-        seq_cache[str(row["pdb_code"])] = native_seq
+        if isinstance(result, tuple):
+            rep, native_seq = result
+            rep_cache[str(row["pdb_code"])] = rep
+            seq_cache[str(row["pdb_code"])] = native_seq
+        else:
+            n_load_fail += 1
+            if len(err_samples) < 5:
+                err_samples.append(
+                    f"  pdb={row['pdb_code']} file={pdb_path.name} chain={chain!r} :: {result}"
+                )
     log.info("ESM-IF coverage: %d ok, %d missing PDB, %d load/inference failed",
              len(rep_cache), n_no_pdb, n_load_fail)
+    for line in err_samples:
+        log.warning(line)
 
     keep = df["pdb_code"].astype(str).isin(rep_cache)
     if int((~keep).sum()):
